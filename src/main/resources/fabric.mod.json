@@ -3,7 +3,7 @@
 “id”: “autosandnew”,
 “version”: “1.0.0”,
 “name”: “AutoSandNew”,
-“description”: “AutoSand mod with online license verification”,
+“description”: “AutoSand mod”,
 “environment”: “client”,
 “entrypoints”: {
 “client”: [
