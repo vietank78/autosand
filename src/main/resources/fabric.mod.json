@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "autosandnew",
+  "version": "${version}",
+  "name": "AutoSandNew",
+  "description": "A new Fabric mod project.",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "autosand.AutoSandNew"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
