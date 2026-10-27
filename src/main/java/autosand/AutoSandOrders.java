@@ -4815,7 +4815,7 @@ final class AutoMiner {
         BlockPos below = feet.below();
 
         // Để các cơ chế an toàn xử lý nước/lava; không cố đào tiếp vào chất lỏng.
-        if (p.isInWater() || p.isInLava() || liquidAt(lv, below) || lavaAt(lv, below)) {
+        if (p.isInWater() || p.isInLava() || AutoSandOrders.liquidAt(lv, below) || AutoSandOrders.lavaAt(lv, below)) {
             descendPhase = false;
             descendTarget = false;
             descendWaitTicks = 0;
@@ -4836,7 +4836,7 @@ final class AutoMiner {
 
         // Khối vừa bị phá và người chơi đang rơi / ô dưới chân đang trống: giữ chế độ đào sâu.
         // Chờ tối đa 40 tick để trọng lực đưa người chơi vào lỗ trước khi chọn lớp tiếp theo.
-        if (passable(lv, below) && descendWaitTicks < 40) {
+        if (AutoSandOrders.passable(lv, below) && descendWaitTicks < 40) {
             descendWaitTicks++;
             descendTarget = false;
             target = null;
