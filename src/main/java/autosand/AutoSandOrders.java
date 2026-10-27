@@ -255,6 +255,9 @@ public class AutoSandOrders implements ClientModInitializer {
     static boolean settle = false;
     static LocalPlayer lastPlayer = null;
     static int reviveIn = 0;
+    /** Sau khi bị kick / vào lại server: tạm dừng đào bấy nhiêu tick (200 tick = 10 giây). */
+    static final int REJOIN_WAIT = 200;
+    static int rejoinWait = 0;
     static boolean buyFood = false, foodWarn = false;            // đang mua đồ ăn (thay vì bình XP)
     static int foodBuyFails = 0, junkCool = 0, junkStep = 0, junkDropped = 0, eatPrevSlot = -1;
     static float eatXRot = Float.NaN, junkXRot = Float.NaN;
@@ -1091,9 +1094,10 @@ public class AutoSandOrders implements ClientModInitializer {
                 case "tunnelLayers" -> AutoMiner.tunnelLayers = Integer.parseInt(v);
                 case "tunnelWidth" -> AutoMiner.tunnelWidth = Integer.parseInt(v);
                 case "tunnelBelow" -> AutoMiner.tunnelBelow = Integer.parseInt(v);
+                case "shaft" -> AutoMiner.shaft = Boolean.parseBoolean(v);
                 case "autoDefend" -> autoDefend = Boolean.parseBoolean(v);
                 case "lowLoad" -> lowLoad = Boolean.parseBoolean(v);
-                default -> { return "Không có mục \"" + name + "\". Xem danh sách trong /autosand set (mendPct, mendUntil, eatBelow, eatUntil, pickup, defenseRadius, fgFps, bgFps, lowLoadView, minSandPrice, maxXpUnitPrice, maxXpSpend, maxTotemUnitPrice, maxTotemSpend, autoDefend, lowLoad, tunnel, tunnelLayers, tunnelWidth, tunnelBelow)."; }
+                default -> { return "Không có mục \"" + name + "\". Xem danh sách trong /autosand set (mendPct, mendUntil, eatBelow, eatUntil, pickup, defenseRadius, fgFps, bgFps, lowLoadView, minSandPrice, maxXpUnitPrice, maxXpSpend, maxTotemUnitPrice, maxTotemSpend, autoDefend, lowLoad, tunnel, tunnelLayers, tunnelWidth, tunnelBelow, shaft)."; }
             }
         } catch (NumberFormatException e) {
             return "Giá trị không hợp lệ: " + v;
@@ -1203,6 +1207,7 @@ public class AutoSandOrders implements ClientModInitializer {
 
     // ----------------------------- ĐIỀU KHIỂN ĐÀO -----------------------------
     static void startMining(LocalPlayer p) {
+        if (rejoinWait > 0) return;                                    // đang chờ 10 giây sau khi vào lại server
         if (useNuker) setNuker(p, true);                                // luôn tự bật Nuker khi bắt đầu đào
         if (mode == Mode.BUILTIN) { AutoMiner.start(p); return; }      // tự đào: không cần Baritone
     }
@@ -1247,6 +1252,7 @@ public class AutoSandOrders implements ClientModInitializer {
         // Chết rồi hồi sinh / vào lại thế giới: LocalPlayer mới -> reset trạng thái và bật lại lệnh đào
         if (p != lastPlayer) {
             boolean had = lastPlayer != null;
+            boolean deathReturn = AutoMiner.deathRecorded && AutoMiner.deathPos != null;   // quay lại do chết (không phải kick)
             lastPlayer = p;
             if (had) {
                 guard = G.NONE;
@@ -1256,6 +1262,12 @@ public class AutoSandOrders implements ClientModInitializer {
                 wait = 0;
                 cooldown = 40;
                 reviveIn = 60;
+                if (!deathReturn) {                                    // vào lại server sau kick: dừng đào, chờ 10 giây
+                    reviveIn = 0;
+                    rejoinWait = REJOIN_WAIT;
+                    AutoMiner.stop(mc);
+                    msg(p, "Vào lại server: tạm dừng đào, chờ 10 giây rồi đào tiếp.");
+                }
                 wdX = Double.NaN;
                 if (mode == Mode.BUILTIN) AutoMiner.onRespawn(mc, p);   // chết -> /home -> về chỗ chết nhặt đồ
             }
@@ -1270,6 +1282,15 @@ public class AutoSandOrders implements ClientModInitializer {
         if (Lobby.tick(mc, p)) return;                       // bị kick ra sảnh -> tự quay lại KingSMP
 
         if (state == S.MINING && !screenBlocks(mc) && guardTick(mc, p)) return;   // an toàn: nước / lava / hố
+
+        if (rejoinWait > 0 && --rejoinWait == 0) {               // hết 10 giây chờ -> đào tiếp
+            startMining(p);
+            msg(p, "Đã chờ xong 10 giây, tiếp tục đào.");
+        }
+        if (rejoinWait > 0) {
+            AutoMiner.release(mc);
+            return;
+        }
 
         if (state == S.MINING) {
             if (screenBlocks(mc)) return;
@@ -2816,7 +2837,8 @@ public class AutoSandOrders implements ClientModInitializer {
             nukerState = null;
             state = S.MINING;
             cooldown = 100;
-            reviveIn = 100;                                   // chờ thế giới tải rồi đào tiếp
+            rejoinWait = REJOIN_WAIT;                         // chờ 10 giây rồi đào tiếp
+            if (useNuker) setNuker(p, false);
             if (AutoMiner.rec != AutoMiner.R_NONE) {          // đang dở việc về chỗ chết -> làm lại từ /home
                 AutoMiner.rec = AutoMiner.R_WAIT;
                 AutoMiner.recTimer = 60;
@@ -2824,7 +2846,7 @@ public class AutoSandOrders implements ClientModInitializer {
                 AutoMiner.teleported = false;
                 AutoMiner.kitStep = 2;
             }
-            msg(p, "Đã quay lại KingSMP, đào tiếp.");
+            msg(p, "Đã quay lại KingSMP, chờ 10 giây rồi đào tiếp.");
         }
     }
 
