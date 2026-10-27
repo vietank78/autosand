@@ -5074,7 +5074,7 @@ final class AutoMiner {
         ensureShovel(p);
         Vec3 e = p.getEyePosition();
         Direction face = Direction.getApproximateNearest(e.x - c.x, e.y - c.y, e.z - c.z);
-        digAcc = Math.min(10000, digAcc + mineSpeed);
+        digAcc = Math.min(10000, digAcc + AutoSandOrders.mineSpeed);
         int calls = 0;
         while (digAcc >= 100 && calls < 5) {
             digAcc -= 100;
