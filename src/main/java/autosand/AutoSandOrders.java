@@ -2535,6 +2535,7 @@ public class AutoSandOrders implements ClientModInitializer {
 
     // ============================== TỰ PHÒNG THỦ ==============================
     static int defendPrevSlot = -1, defendTicks = 0, defendCool = 0, defendIdle = 0;
+    static int defendAttackWait = 0, defendAimWait = 0;
 
     static int weaponSlot(LocalPlayer p) {
         int axe = -1;
@@ -2551,6 +2552,8 @@ public class AutoSandOrders implements ClientModInitializer {
         if (defendPrevSlot >= 0) { setSelected(p, defendPrevSlot); defendPrevSlot = -1; }
         defendTicks = 0;
         defendIdle = 0;
+        defendAttackWait = 0;
+        defendAimWait = 0;
     }
 
     /**
@@ -2587,12 +2590,25 @@ public class AutoSandOrders implements ClientModInitializer {
         if (getSelected(p) != w) { setSelected(p, w); return true; }
 
         mc.options.keyAttack.setDown(false);
+        if (defendAttackWait > 0) defendAttackWait--;
         AutoMiner.aimAt(p, best.getBoundingBox().getCenter());
         double dist = Math.sqrt(bestD);
-        mc.options.keyUp.setDown(dist > 2.6);                     // còn xa thì tiến lại gần
-        if (dist <= 3.0 && p.getAttackStrengthScale(0f) >= 0.95f) {
-            mc.gameMode.attack(p, best);
-            p.swing(InteractionHand.MAIN_HAND);
+        // Đứng yên khi vào tầm đánh để tránh vừa chạy vừa đánh khiến đòn bị hụt.
+        mc.options.keyUp.setDown(dist > 2.7);
+        if (dist <= 2.9) {
+            if (defendAimWait < 2) {
+                defendAimWait++; // cho góc nhìn mới được gửi lên máy chủ trước khi đánh
+                return true;
+            }
+            if (defendAttackWait == 0 && p.getAttackStrengthScale(0.5f) >= 0.90f
+                    && p.hasLineOfSight(best) && best.isAlive()) {
+                mc.gameMode.attack(p, best);
+                p.swing(InteractionHand.MAIN_HAND);
+                defendAttackWait = 10; // không spam gói đánh; chờ hồi đòn
+                defendAimWait = 0;
+            }
+        } else {
+            defendAimWait = 0;
         }
         return true;
     }
@@ -4304,6 +4320,8 @@ final class AutoMiner {
     // Đào thẳng xuống cột cát trước; khi hết cát ngay dưới chân thì chuyển sang đào quanh khu vực.
     static boolean descendPhase = true;
     static boolean descendTarget = false;
+    // Đợi vật lý kéo người chơi rơi xuống sau khi khối cát dưới chân bị phá.
+    static int descendWaitTicks = 0;
     static ItemEntity itemTarget = null;
     static List<BlockPos> path = null;
     static int pi = 0;
@@ -4375,6 +4393,7 @@ final class AutoMiner {
         baseY = -1000000;
         descendPhase = true;
         descendTarget = false;
+        descendWaitTicks = 0;
         noTarget = 0;
         exploreCount = 0;
         ignoreBlocks.clear();
@@ -4786,12 +4805,27 @@ final class AutoMiner {
         return false;
     }
 
-    /** Ưu tiên đào cát ngay dưới chân theo chiều sâu; nếu cột kết thúc, chuyển sang đào quanh. */
+    /**
+     * Đào liên tục cát ngay dưới chân. Sau khi phá một khối, KHÔNG tắt chế độ đào sâu
+     * chỉ vì ô dưới chân vừa thành không khí: chờ người chơi rơi xuống rồi kiểm tra lớp kế tiếp.
+     * Chỉ kết thúc khi gặp nền đặc không phải cát hoặc vùng chất lỏng nguy hiểm.
+     */
     static boolean planDescendSand(LocalPlayer p, ClientLevel lv) {
-        BlockPos below = p.blockPosition().below();
+        BlockPos feet = p.blockPosition();
+        BlockPos below = feet.below();
+
+        // Để các cơ chế an toàn xử lý nước/lava; không cố đào tiếp vào chất lỏng.
+        if (p.isInWater() || p.isInLava() || liquidAt(lv, below) || lavaAt(lv, below)) {
+            descendPhase = false;
+            descendTarget = false;
+            descendWaitTicks = 0;
+            return false;
+        }
+
         if (lv.getBlockState(below).is(Blocks.SAND) && !ignoreBlocks.contains(below.asLong())
                 && !waterWithin(lv, below, 1)
                 && canMineFromEye(lv, p, p.getEyePosition(), below)) {
+            descendWaitTicks = 0;
             target = below;
             descendTarget = true;
             path = null;
@@ -4799,9 +4833,24 @@ final class AutoMiner {
             phTicks = 0;
             return true;
         }
-        // Không còn cát trực tiếp dưới chân: kết thúc giai đoạn đào sâu và bắt đầu đi quanh đào cát.
+
+        // Khối vừa bị phá và người chơi đang rơi / ô dưới chân đang trống: giữ chế độ đào sâu.
+        // Chờ tối đa 40 tick để trọng lực đưa người chơi vào lỗ trước khi chọn lớp tiếp theo.
+        if (passable(lv, below) && descendWaitTicks < 40) {
+            descendWaitTicks++;
+            descendTarget = false;
+            target = null;
+            path = null;
+            ph = P_IDLE;
+            phTicks = 0;
+            release(Minecraft.getInstance());
+            return true;
+        }
+
+        // Không có cát bên dưới và đã đứng trên nền khác (hoặc chờ rơi quá lâu): đào quanh.
         descendPhase = false;
         descendTarget = false;
+        descendWaitTicks = 0;
         return false;
     }
 
