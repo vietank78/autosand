@@ -2075,7 +2075,7 @@ public class AutoSandOrders implements ClientModInitializer {
         for (int i = 0; i < 3; i++) {
             if (p.getInventory().getItem(i).is(Items.EXPERIENCE_BOTTLE)) return i;
         }
-        return 3;
+        return reserveWeapon ? 4 : 3;      // ô 4 có thể đang dành cho kiếm / rìu -> bình XP dùng ô 5
     }
 
     /** Bố cục chuẩn: ô1 xẻng, ô2 cà rốt vàng, ô3 cát, ô4-9 bình XP. */
@@ -2710,7 +2710,7 @@ public class AutoSandOrders implements ClientModInitializer {
             for (int i = 0; i < 9; i++) {
                 ItemStack st = p.getInventory().getItem(i);
                 if (st.isEmpty()) continue;
-                if (keepItem(st)) return false;
+                if (keepItem(st) && !isWeapon(st)) return false;
                 any = true;
             }
             return any;
@@ -2810,6 +2810,8 @@ public class AutoSandOrders implements ClientModInitializer {
             reset();
             if (screenBlocks(mc)) p.closeContainer();
             AutoMiner.stop(mc);
+            AutoMiner.freshStart();
+            guardReset(mc, p);
             AutoMiner.baseY = -1000000;
             nukerState = null;
             state = S.MINING;
@@ -4419,7 +4421,31 @@ final class AutoMiner {
     }
 
     /** Gọi khi LocalPlayer mới xuất hiện sau khi chết / vào lại thế giới. */
+    /** Vào lại server (sau kick) / hồi sinh: xoá mọi trạng thái đào cũ để bắt đầu sạch, tránh bỏ qua cát nhầm. */
+    static void freshStart() {
+        ignoreBlocks.clear();
+        ignoreItems.clear();
+        ignoreAge = 0;
+        tunnelInit = false;
+        tunnelMove = false;
+        tunnelFails = 0;
+        tunnelTurns = 0;
+        tunnelPause = 0;
+        shaftInit = false;
+        shaftBlocked = false;
+        scanCool = 0;
+        noTarget = 0;
+        exploreCount = 0;
+        path = null;
+        target = null;
+        itemTarget = null;
+        ph = P_IDLE;
+        phTicks = 0;
+        stuck = 0;
+    }
+
     static void onRespawn(Minecraft mc, LocalPlayer p) {
+        freshStart();
         path = null;
         target = null;
         itemTarget = null;
@@ -4720,7 +4746,24 @@ final class AutoMiner {
         if (!p.onGround()) return true;                         // đang rơi: không làm gì, đợi chạm đất
         if (shaftTop - me.getY() >= SHAFT_MAX_DEPTH) { shaftBlocked = true; return false; }
 
-        // 1) cát trong vòng 3x3 quanh giếng, từ đầu xuống chân (đào được tới đâu đào tới đó)
+        // 1) ưu tiên: cát ngay dưới chân -> đào luôn để rơi xuống một tầng
+        BlockPos below = new BlockPos(shaftX, me.getY() - 1, shaftZ);
+        if (lv.getBlockState(below).is(Blocks.SAND) && !ignoreBlocks.contains(below.asLong())
+            && !waterWithin(lv, below, 2)) {
+            boolean landing = false;
+            for (int k = 1; k <= 3 && !landing; k++) {           // chỗ rơi tới không được hụt quá 3 ô
+                if (!lv.getBlockState(below.below(k)).isAir()) landing = true;
+            }
+            if (landing) {
+                target = below;
+                path = null;
+                ph = P_MINE;
+                phTicks = 0;
+                return true;
+            }
+        }
+
+        // 2) dưới chân không còn cát (hoặc không đào được) -> đào cát xung quanh: vòng 3x3, từ đầu xuống chân
         Vec3 eye = p.getEyePosition();
         for (int y = me.getY() + 1; y >= me.getY(); y--) {
             for (int dx = -SHAFT_R; dx <= SHAFT_R; dx++) {
@@ -4739,20 +4782,9 @@ final class AutoMiner {
             }
         }
 
-        // 2) hết cát quanh chân -> đào khối cát ngay dưới chân để tự rơi xuống một tầng
-        BlockPos below = new BlockPos(shaftX, me.getY() - 1, shaftZ);
-        if (!lv.getBlockState(below).is(Blocks.SAND) || ignoreBlocks.contains(below.asLong())) { shaftBlocked = true; return false; }
-        if (waterWithin(lv, below, 2)) { shaftBlocked = true; return false; }   // có nước / lava gần -> dừng giếng
-        boolean landing = false;
-        for (int k = 1; k <= 3 && !landing; k++) {               // chỗ rơi tới không được hụt quá 3 ô
-            if (!lv.getBlockState(below.below(k)).isAir()) landing = true;
-        }
-        if (!landing) { shaftBlocked = true; return false; }
-        target = below;
-        path = null;
-        ph = P_MINE;
-        phTicks = 0;
-        return true;
+        // 3) hết cát cả dưới chân lẫn xung quanh -> giếng dừng ở đây
+        shaftBlocked = true;
+        return false;
     }
 
     static boolean planToSand(LocalPlayer p, ClientLevel lv) {
