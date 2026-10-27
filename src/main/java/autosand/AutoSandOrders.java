@@ -223,7 +223,7 @@ public class AutoSandOrders implements ClientModInitializer {
     static boolean autoRejoin = true;       // bị kick ra sảnh -> la bàn -> KingSMP
     static boolean usePearl = true;         // chết xa -> mua ngọc Ender ném tới chỗ chết
     static boolean autoTotem = true;        // tay trái luôn cầm totem; dùng mất thì mua lại ở /shop -> GEAR
-    static int mineSpeed = 300;             // hệ số gọi phá khối; máy chủ vẫn quyết định tốc độ thực tế
+    static int mineSpeed = 500;             // ưu tiên tốc độ đào tối đa trong giới hạn client/server
     static final int[] SPEED_LEVELS = {500, 400, 300, 200, 150, 100};
     static double pricePerSand = 5.0;       // ước tính tiền / 1 cát giao đơn (chỉnh bằng /autosand price <số>)
     static long statSand = 0, statTicks = 0;
@@ -1001,8 +1001,8 @@ public class AutoSandOrders implements ClientModInitializer {
             autoRejoin = pBool(pr, "autoRejoin", true);
             usePearl = pBool(pr, "usePearl", true);
             autoTotem = pBool(pr, "autoTotem", true);
-            mineSpeed = pInt(pr, "mineSpeed", 300);
-            if (mineSpeed < 5 || mineSpeed > 500) mineSpeed = 300;
+            mineSpeed = pInt(pr, "mineSpeed", 500);
+            if (mineSpeed < 5 || mineSpeed > 500) mineSpeed = 500;
             pricePerSand = pDbl(pr, "pricePerSand", 5);
             statSand = pLong(pr, "statSand", 0L);
             statTicks = pLong(pr, "statTicks", 0L);
@@ -4301,6 +4301,9 @@ final class AutoMiner {
     static int ph = P_IDLE, phTicks = 0, stuck = 0, scanCool = 0, noTarget = 0, exploreCount = 0, ignoreAge = 0;
     static int baseY = -1000000;
     static BlockPos target = null;
+    // Đào thẳng xuống cột cát trước; khi hết cát ngay dưới chân thì chuyển sang đào quanh khu vực.
+    static boolean descendPhase = true;
+    static boolean descendTarget = false;
     static ItemEntity itemTarget = null;
     static List<BlockPos> path = null;
     static int pi = 0;
@@ -4370,6 +4373,8 @@ final class AutoMiner {
         rec = R_NONE;
         deathRecorded = false;
         baseY = -1000000;
+        descendPhase = true;
+        descendTarget = false;
         noTarget = 0;
         exploreCount = 0;
         ignoreBlocks.clear();
@@ -4534,6 +4539,14 @@ final class AutoMiner {
             ignoreBlocks.clear();
             ignoreItems.clear();
             ignoreAge = 0;
+        }
+
+        // Giai đoạn đầu: đào thẳng xuống cột cát dưới chân. Hết cát dưới chân thì
+        // chuyển hẳn sang tìm cát xung quanh và di chuyển tự do, không đào theo từng tầng.
+        if (descendPhase && planDescendSand(p, lv)) {
+            noTarget = 0;
+            exploreCount = 0;
+            return;
         }
 
         // 1) cát rơi gần đó -> đi nhặt
@@ -4773,6 +4786,25 @@ final class AutoMiner {
         return false;
     }
 
+    /** Ưu tiên đào cát ngay dưới chân theo chiều sâu; nếu cột kết thúc, chuyển sang đào quanh. */
+    static boolean planDescendSand(LocalPlayer p, ClientLevel lv) {
+        BlockPos below = p.blockPosition().below();
+        if (lv.getBlockState(below).is(Blocks.SAND) && !ignoreBlocks.contains(below.asLong())
+                && !waterWithin(lv, below, 1)
+                && canMineFromEye(lv, p, p.getEyePosition(), below)) {
+            target = below;
+            descendTarget = true;
+            path = null;
+            ph = P_MINE;
+            phTicks = 0;
+            return true;
+        }
+        // Không còn cát trực tiếp dưới chân: kết thúc giai đoạn đào sâu và bắt đầu đi quanh đào cát.
+        descendPhase = false;
+        descendTarget = false;
+        return false;
+    }
+
     static final int NEAR_RADIUS = 5;
 
     /** Chọn cát gần người chơi, ưu tiên khối sát cạnh và bên dưới chân. */
@@ -4812,6 +4844,7 @@ final class AutoMiner {
         BlockPos c = findBestNearSand(lv, p);
         if (c == null) return false;
         target = c;
+        descendTarget = false;
         path = null;
         ph = P_MINE;
         phTicks = 0;
@@ -5039,13 +5072,14 @@ final class AutoMiner {
         BlockPos t = target;
         if (t == null || !lv.getBlockState(t).is(Blocks.SAND)) {        // đào xong
             target = null;
+            descendTarget = false;
             ph = P_IDLE;
             phTicks = 0;
             scanCool = 0;
             return;
         }
-        boolean shaftCell = shaft && t.getX() == shaftX && t.getZ() == shaftZ;   // cột giếng: được đào thẳng xuống dưới chân
-        if (phTicks > MINE_TIMEOUT || (!shaftCell && underOrOver(p, t))) {
+        boolean shaftCell = shaft && t.getX() == shaftX && t.getZ() == shaftZ;   // tương thích cấu hình cũ
+        if (phTicks > MINE_TIMEOUT || (!(shaftCell || descendTarget) && underOrOver(p, t))) {
             ignoreBlocks.add(t.asLong());
             target = null;
             ph = P_IDLE;
@@ -5058,6 +5092,7 @@ final class AutoMiner {
             else { failKey = t.asLong(); failCount = 1; }
             if (failCount >= 3) { ignoreBlocks.add(t.asLong()); failCount = 0; }
             target = null;
+            descendTarget = false;
             ph = P_IDLE;
             phTicks = 0;
             scanCool = 2;
@@ -5110,7 +5145,7 @@ final class AutoMiner {
         while (pi < path.size()) {
             BlockPos q = path.get(pi);
             double qx = q.getX() + 0.5 - pos.x, qz = q.getZ() + 0.5 - pos.z, qy = pos.y - q.getY();
-            if (Math.hypot(qx, qz) < 0.45 && qy < 1.2 && qy > -1.2) { pi++; stuck = 0; } else break;
+            if (Math.hypot(qx, qz) < 0.30 && qy < 1.2 && qy > -1.2) { pi++; stuck = 0; } else break;
         }
         if (pi >= path.size()) { release(mc); return DONE; }
 
@@ -5141,7 +5176,8 @@ final class AutoMiner {
         mc.options.keyUp.setDown(!(dropAhead && dist < 0.5));
         boolean jump = (n.getY() > pos.y + 0.3 && dist < 1.7) || (p.horizontalCollision && p.onGround());
         mc.options.keyJump.setDown(jump);
-        mc.options.keySprint.setDown(dist > 1.2 && !jump && !dropAhead);
+        // Sprint khi đang di chuyển; tránh sprint sát mép khi chuẩn bị rơi xuống.
+        mc.options.keySprint.setDown(dist > 0.1 && !dropAhead);
 
         if (lastPos != null && pos.distanceToSqr(lastPos) < 0.0016) {
             if (++stuck > 40) return FAIL;
