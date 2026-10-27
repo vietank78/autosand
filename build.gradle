@@ -27,3 +27,11 @@ tasks.withType(JavaCompile).configureEach {
     options.release = 21
     options.encoding = 'UTF-8'
 }
+
+// Bundle Baritone as a nested Fabric mod so users install only the AutoSand JAR.
+tasks.named('jar') {
+    from('libs/baritone-1.17.0.jar') {
+        into 'META-INF/jars'
+        rename { 'baritone-1.17.0.jar' }
+    }
+}
