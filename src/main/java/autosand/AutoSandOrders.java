@@ -994,6 +994,7 @@ public class AutoSandOrders implements ClientModInitializer {
             AutoMiner.tunnelLayers = pInt(pr, "tunnelLayers", 3);
             AutoMiner.tunnelWidth = pInt(pr, "tunnelWidth", 3);
             AutoMiner.tunnelBelow = pInt(pr, "tunnelBelow", 0);
+            AutoMiner.shaft = pBool(pr, "shaft", false);
             autoRejoin = pBool(pr, "autoRejoin", true);
             usePearl = pBool(pr, "usePearl", true);
             autoTotem = pBool(pr, "autoTotem", true);
@@ -1053,10 +1054,10 @@ public class AutoSandOrders implements ClientModInitializer {
         bgFps = clampI(bgFps, 1, 60);
         lowLoadView = clampI(lowLoadView, 2, 32);
         AutoMiner.scanRadius = clampI(AutoMiner.scanRadius, 4, 64);
-        AutoMiner.tunnelLayers = clampI(AutoMiner.tunnelLayers, 1, 6);
+        AutoMiner.tunnelLayers = clampI(AutoMiner.tunnelLayers, 1, 8);
         AutoMiner.tunnelWidth = clampI(AutoMiner.tunnelWidth, 1, 5);
         if (AutoMiner.tunnelWidth % 2 == 0) AutoMiner.tunnelWidth++;          // độ rộng phải lẻ để có trục giữa
-        AutoMiner.tunnelBelow = clampI(AutoMiner.tunnelBelow, 0, Math.min(2, AutoMiner.tunnelLayers - 1));
+        AutoMiner.tunnelBelow = clampI(AutoMiner.tunnelBelow, 0, Math.min(7, AutoMiner.tunnelLayers - 1));
         AutoMiner.tunnelInit = false;
         pricePerSand = clampD(pricePerSand);
         minSandPrice = clampD(minSandPrice);
@@ -1132,6 +1133,7 @@ public class AutoSandOrders implements ClientModInitializer {
             pr.setProperty("tunnelLayers", String.valueOf(AutoMiner.tunnelLayers));
             pr.setProperty("tunnelWidth", String.valueOf(AutoMiner.tunnelWidth));
             pr.setProperty("tunnelBelow", String.valueOf(AutoMiner.tunnelBelow));
+            pr.setProperty("shaft", String.valueOf(AutoMiner.shaft));
             pr.setProperty("autoRejoin", String.valueOf(autoRejoin));
             pr.setProperty("usePearl", String.valueOf(usePearl));
             pr.setProperty("autoTotem", String.valueOf(autoTotem));
@@ -2077,12 +2079,20 @@ public class AutoSandOrders implements ClientModInitializer {
     }
 
     /** Bố cục chuẩn: ô1 xẻng, ô2 cà rốt vàng, ô3 cát, ô4-9 bình XP. */
+    /** Có kiếm / rìu trong túi hay thanh công cụ -> ô 4 (index 3) dành cho vũ khí thay vì bình XP. Cập nhật trong arrangeMove. */
+    static boolean reserveWeapon = false;
+
+    static boolean isWeapon(ItemStack st) {
+        return st.is(ItemTags.SWORDS) || st.is(ItemTags.AXES);
+    }
+
     static boolean correctAt(int slot, ItemStack st) {
         if (st.isEmpty()) return false;
         return switch (slot) {
             case 0 -> st.is(ItemTags.SHOVELS);
             case 1 -> st.is(Items.GOLDEN_CARROT);
             case 2 -> st.is(Items.SAND);
+            case 3 -> reserveWeapon ? isWeapon(st) : st.is(Items.EXPERIENCE_BOTTLE);
             default -> st.is(Items.EXPERIENCE_BOTTLE);
         };
     }
@@ -2090,7 +2100,8 @@ public class AutoSandOrders implements ClientModInitializer {
     /** Được phép vứt (không phải xẻng / bình XP / cà rốt vàng / ngọc Ender). */
     static boolean droppable(ItemStack st) {
         return !st.isEmpty() && !st.is(Items.EXPERIENCE_BOTTLE) && !st.is(ItemTags.SHOVELS)
-            && !st.is(Items.GOLDEN_CARROT) && !st.is(Items.ENDER_PEARL) && !st.is(Items.TOTEM_OF_UNDYING);
+            && !st.is(Items.GOLDEN_CARROT) && !st.is(Items.ENDER_PEARL) && !st.is(Items.TOTEM_OF_UNDYING)
+            && !isWeapon(st);
     }
 
     /** Ô 4-9 đầu tiên chứa thứ không phải bình XP và vứt được (cát, đồ khác); -1 nếu sạch. */
@@ -2107,6 +2118,8 @@ public class AutoSandOrders implements ClientModInitializer {
      */
     static int[] arrangeMove(LocalPlayer p) {
         var inv = p.getInventory();
+        reserveWeapon = false;
+        for (int j = 0; j < 36 && !reserveWeapon; j++) reserveWeapon = isWeapon(inv.getItem(j));
         for (int i = 0; i < 9; i++) {
             if (correctAt(i, inv.getItem(i))) continue;
             int src = -1;
@@ -2197,6 +2210,7 @@ public class AutoSandOrders implements ClientModInitializer {
         return st.is(Items.SAND)
             || st.is(Items.EXPERIENCE_BOTTLE)
             || st.is(ItemTags.SHOVELS)
+            || st.is(ItemTags.SWORDS) || st.is(ItemTags.AXES)   // kiếm / rìu: giữ để tự đánh quái
             || st.is(Items.GOLDEN_CARROT)
             || st.is(Items.ENDER_PEARL)
             || st.is(Items.TOTEM_OF_UNDYING)                 // totem: KHÔNG bao giờ tự vứt
@@ -3047,8 +3061,9 @@ public class AutoSandOrders implements ClientModInitializer {
         //    - hố hẹp 1 ô (4 phía chắn): vào thoát sau TRAP_TICKS tick
         //    - hố rộng / hang kín: đứng yên không đào, không đi được ~3 giây mà vùng đi bộ được bị khép kín -> thoát
         if (escCool > 0) escCool--;
-        boolean tight = avoidHole && p.onGround() && trapped(lv, p.blockPosition());
-        boolean pocket = avoidHole && !tight && p.onGround() && escCool <= 0 && pocketStuck(mc, p, lv);
+        boolean shaftDigging = AutoMiner.shaft && !AutoMiner.shaftBlocked;   // đang đào giếng xuống được -> không can thiệp
+        boolean tight = avoidHole && !shaftDigging && p.onGround() && trapped(lv, p.blockPosition());
+        boolean pocket = avoidHole && !shaftDigging && !tight && p.onGround() && escCool <= 0 && pocketStuck(mc, p, lv);
         if ((tight || pocket) && escCool <= 0) {
             if (pocket || ++trapTicks >= TRAP_TICKS) {
                 trapTicks = 0;
@@ -4002,6 +4017,10 @@ public class AutoSandOrders implements ClientModInitializer {
                         if (AutoMiner.tunnelBelow > AutoMiner.tunnelLayers - 1) AutoMiner.tunnelBelow = 0;
                         AutoMiner.tunnelInit = false;
                     });
+                    toggle(4, "Đào giếng xuống (cát)", "Sa mạc: đào hết cát quanh chân rồi đào xuống dưới chân, lặp lại", () -> AutoMiner.shaft, v -> {
+                        AutoMiner.shaft = v;
+                        AutoMiner.shaftInit = false;
+                    });
                 }
                 case 6 -> {
                     begin(7);
@@ -4255,9 +4274,9 @@ final class AutoMiner {
     static int tunnelLayers = 3;            // số lớp (chiều cao hầm)
     static int tunnelWidth = 3;             // độ rộng hầm (số lẻ: 1, 3, 5)
     static int tunnelBelow = 0;             // số lớp đào xuống DƯỚI chân (0 = không đào nền đang đứng)
-    static final int[] TUNNEL_LAYER_LEVELS = {2, 3, 4, 5};
+    static final int[] TUNNEL_LAYER_LEVELS = {2, 3, 4, 5, 6, 8};
     static final int[] TUNNEL_WIDTH_LEVELS = {1, 3, 5};
-    static final int[] TUNNEL_BELOW_LEVELS = {0, 1, 2};
+    static final int[] TUNNEL_BELOW_LEVELS = {0, 1, 2, 3, 4, 5, 6, 7};
     static boolean tunnelInit = false, tunnelMove = false;
     static Direction tunnelDir = Direction.NORTH;
     static int tunnelAx = 0, tunnelAz = 0, tunnelBase = 0, tunnelFails = 0, tunnelTurns = 0, tunnelPause = 0;
@@ -4526,8 +4545,15 @@ final class AutoMiner {
             }
         }
 
+        // 1c) đào giếng xuống (nếu bật, chạy thay cho đào hầm)
+        if (shaft && planShaft(p, lv)) {
+            noTarget = 0;
+            exploreCount = 0;
+            return;
+        }
+
         // 1b) đào hầm nhiều lớp (nếu bật)
-        if (tunnel && tunnelPause <= 0 && planTunnel(mc, p, lv)) {
+        if (tunnel && !shaft && tunnelPause <= 0 && planTunnel(mc, p, lv)) {
             noTarget = 0;
             exploreCount = 0;
             return;
@@ -4664,6 +4690,67 @@ final class AutoMiner {
         stuck = 0;
         tunnelMove = true;
         ph = P_EXPLORE;
+        phTicks = 0;
+        return true;
+    }
+
+    // ----------------------------- ĐÀO GIẾNG XUỐNG (CÁT) -----------------------------
+    /** Bật: chỗ nhiều cát (sa mạc) -> đào hết cát quanh chân, rồi đào khối cát dưới chân để rơi xuống, lặp lại. */
+    static boolean shaft = false;
+    static final int SHAFT_R = 1;             // bán kính giếng (1 = giếng rộng 3x3)
+    static final int SHAFT_MAX_DEPTH = 40;    // đào tối đa bấy nhiêu lớp tính từ lúc bắt đầu giếng
+    static boolean shaftInit = false;
+    static int shaftX, shaftZ, shaftTop;
+    /** Lần gọi gần nhất không còn đường đào xuống (kẹt đáy hố) -> bộ thoát hố được phép đặt block leo lên. */
+    static boolean shaftBlocked = false;
+
+    static boolean planShaft(LocalPlayer p, ClientLevel lv) {
+        shaftBlocked = false;
+        BlockPos me = p.blockPosition();
+        if (shaftInit && (Math.abs(p.getX() - (shaftX + 0.5)) > 1.2 || Math.abs(p.getZ() - (shaftZ + 0.5)) > 1.2)) {
+            shaftInit = false;                                  // đã đi chỗ khác -> giếng mới tại đây
+        }
+        if (!shaftInit) {
+            if (!p.onGround()) return true;                     // đang rơi: đợi đáp xuống
+            shaftX = me.getX();
+            shaftZ = me.getZ();
+            shaftTop = me.getY();
+            shaftInit = true;
+        }
+        if (!p.onGround()) return true;                         // đang rơi: không làm gì, đợi chạm đất
+        if (shaftTop - me.getY() >= SHAFT_MAX_DEPTH) { shaftBlocked = true; return false; }
+
+        // 1) cát trong vòng 3x3 quanh giếng, từ đầu xuống chân (đào được tới đâu đào tới đó)
+        Vec3 eye = p.getEyePosition();
+        for (int y = me.getY() + 1; y >= me.getY(); y--) {
+            for (int dx = -SHAFT_R; dx <= SHAFT_R; dx++) {
+                for (int dz = -SHAFT_R; dz <= SHAFT_R; dz++) {
+                    BlockPos c = new BlockPos(shaftX + dx, y, shaftZ + dz);
+                    if (!lv.getBlockState(c).is(Blocks.SAND) || ignoreBlocks.contains(c.asLong())) continue;
+                    if (waterWithin(lv, c, 2)) { ignoreBlocks.add(c.asLong()); continue; }
+                    if (canMineFromEye(lv, p, eye, c)) {
+                        target = c;
+                        path = null;
+                        ph = P_MINE;
+                        phTicks = 0;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // 2) hết cát quanh chân -> đào khối cát ngay dưới chân để tự rơi xuống một tầng
+        BlockPos below = new BlockPos(shaftX, me.getY() - 1, shaftZ);
+        if (!lv.getBlockState(below).is(Blocks.SAND) || ignoreBlocks.contains(below.asLong())) { shaftBlocked = true; return false; }
+        if (waterWithin(lv, below, 2)) { shaftBlocked = true; return false; }   // có nước / lava gần -> dừng giếng
+        boolean landing = false;
+        for (int k = 1; k <= 3 && !landing; k++) {               // chỗ rơi tới không được hụt quá 3 ô
+            if (!lv.getBlockState(below.below(k)).isAir()) landing = true;
+        }
+        if (!landing) { shaftBlocked = true; return false; }
+        target = below;
+        path = null;
+        ph = P_MINE;
         phTicks = 0;
         return true;
     }
@@ -4933,7 +5020,8 @@ final class AutoMiner {
             scanCool = 0;
             return;
         }
-        if (phTicks > MINE_TIMEOUT || underOrOver(p, t)) {
+        boolean shaftCell = shaft && t.getX() == shaftX && t.getZ() == shaftZ;   // cột giếng: được đào thẳng xuống dưới chân
+        if (phTicks > MINE_TIMEOUT || (!shaftCell && underOrOver(p, t))) {
             ignoreBlocks.add(t.asLong());
             target = null;
             ph = P_IDLE;
