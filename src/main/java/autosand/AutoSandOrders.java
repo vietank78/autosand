@@ -4371,6 +4371,7 @@ final class AutoMiner {
 
     static void stop(Minecraft mc) {
         active = false;
+        cancelBaritoneNavigation();
         path = null;
         target = null;
         itemTarget = null;
@@ -4412,6 +4413,7 @@ final class AutoMiner {
     // ----------------------------- CHẾT / HỒI SINH -----------------------------
     /** Gọi mỗi tick khi người chơi đang chết. */
     static void onDead(Minecraft mc, LocalPlayer p) {
+        cancelBaritoneNavigation();
         release(mc);
         // Chết lần đầu, hoặc chết lại sau khi đã nhặt được xẻng -> ghi toạ độ mới.
         // Chết giữa đường khi CHƯA nhặt được xẻng -> giữ toạ độ cũ (đồ vẫn nằm ở chỗ cũ), tiếp tục đi tới đó.
@@ -4433,6 +4435,8 @@ final class AutoMiner {
     /** Gọi khi LocalPlayer mới xuất hiện sau khi chết / vào lại thế giới. */
     /** Vào lại server (sau kick) / hồi sinh: xoá mọi trạng thái đào cũ để bắt đầu sạch, tránh bỏ qua cát nhầm. */
     static void freshStart() {
+        cancelBaritoneNavigation();
+        baritoneFallbackPath = null;
         ignoreBlocks.clear();
         ignoreItems.clear();
         ignoreAge = 0;
@@ -4983,6 +4987,7 @@ final class AutoMiner {
         ax /= len;
         az /= len;
         if (AutoSandOrders.hazardDir(lv, p.getX(), p.getY(), p.getZ(), ax, az)) return false;
+        cancelBaritoneNavigation();
         path = null;
         target = null;
         itemTarget = null;
@@ -5099,6 +5104,8 @@ final class AutoMiner {
     }
 
     static void failTravel(Minecraft mc) {
+        cancelBaritoneNavigation();
+        baritoneFallbackPath = null;
         if (tunnelMove) tunnelFails++;                          // đi tiến lên trong hầm bị hỏng
         if (ph == P_MOVE && target != null) ignoreBlocks.add(target.asLong());
         if (ph == P_ITEM && itemTarget != null) ignoreItems.add(itemTarget.getId());
@@ -5106,6 +5113,8 @@ final class AutoMiner {
     }
 
     static void endTravel(Minecraft mc) {
+        cancelBaritoneNavigation();
+        baritoneFallbackPath = null;
         tunnelMove = false;
         release(mc);
         path = null;
@@ -5187,9 +5196,191 @@ final class AutoMiner {
     static Vec3 pgPos = Vec3.ZERO;
     static int pgTicks = 0, pgFails = 0, pgHit = 0;
 
-    /** Đi theo path[pi...]. Đào khối chắn đường nếu được phép. */
+    // ----------------------------- BARITONE NAVIGATION BRIDGE -----------------------------
+    // Baritone chỉ điều hướng; AutoSand vẫn chịu trách nhiệm đào cát, nhặt đồ và an toàn.
+    // Dùng reflection để source vẫn biên dịch được khi Baritone không có trên compile classpath.
+    static Object baritoneInstance = null;
+    static Object baritonePathing = null;
+    static Object baritoneGoalProcess = null;
+    static Object baritoneSettings = null;
+    static BlockPos baritoneGoal = null;
+    static List<BlockPos> baritoneFallbackPath = null;
+    static boolean baritoneNavigating = false;
+    static boolean baritoneSettingsCaptured = false;
+    static boolean baritoneSettingsApplied = false;
+    static boolean baritoneWarned = false;
+    static int baritoneNavTicks = 0;
+    static final Map<String, Object> baritoneOriginalSettings = new HashMap<>();
+
+    static Object invokeNoArgs(Object target, String name) throws ReflectiveOperationException {
+        Method m = target.getClass().getMethod(name);
+        try { m.setAccessible(true); } catch (RuntimeException ignored) { }
+        return m.invoke(target);
+    }
+
+    static Object readSettingValue(Object setting) throws ReflectiveOperationException {
+        Field f = setting.getClass().getField("value");
+        return f.get(setting);
+    }
+
+    static void writeSettingValue(Object setting, Object value) throws ReflectiveOperationException {
+        Field f = setting.getClass().getField("value");
+        f.set(setting, value);
+    }
+
+    static void captureBaritoneSettings() {
+        if (baritoneSettingsCaptured || baritoneSettings == null) return;
+        try {
+            for (String name : new String[]{"allowBreak", "allowPlace", "allowPlaceInFluidsSource",
+                    "allowPlaceInFluidsFlow", "allowWaterBucketFall", "assumeWalkOnWater", "assumeWalkOnLava"}) {
+                try {
+                    Object setting = baritoneSettings.getClass().getField(name).get(baritoneSettings);
+                    baritoneOriginalSettings.put(name, readSettingValue(setting));
+                } catch (ReflectiveOperationException ignored) { }
+            }
+            baritoneSettingsCaptured = true;
+        } catch (RuntimeException ignored) { }
+    }
+
+    static void applyBaritoneNavigationSafety() {
+        if (baritoneSettings == null) return;
+        captureBaritoneSettings();
+        try {
+            for (String name : new String[]{"allowBreak", "allowPlace", "allowPlaceInFluidsSource",
+                    "allowPlaceInFluidsFlow", "allowWaterBucketFall", "assumeWalkOnWater", "assumeWalkOnLava"}) {
+                try {
+                    Object setting = baritoneSettings.getClass().getField(name).get(baritoneSettings);
+                    writeSettingValue(setting, Boolean.FALSE);
+                } catch (ReflectiveOperationException ignored) { }
+            }
+            baritoneSettingsApplied = true;
+        } catch (RuntimeException ignored) { }
+    }
+
+    static void restoreBaritoneSettings() {
+        if (!baritoneSettingsApplied || baritoneSettings == null) return;
+        for (Map.Entry<String, Object> e : baritoneOriginalSettings.entrySet()) {
+            try {
+                Object setting = baritoneSettings.getClass().getField(e.getKey()).get(baritoneSettings);
+                writeSettingValue(setting, e.getValue());
+            } catch (ReflectiveOperationException ignored) { }
+        }
+        baritoneSettingsApplied = false;
+    }
+
+    static boolean initBaritone(Minecraft mc) {
+        if (baritoneGoalProcess != null && baritonePathing != null) return true;
+        try {
+            Class<?> api = Class.forName("baritone.api.BaritoneAPI");
+            Object provider = api.getMethod("getProvider").invoke(null);
+            Object instance = null;
+            for (Method m : provider.getClass().getMethods()) {
+                if (!m.getName().equals("getBaritoneForMinecraft") || m.getParameterCount() != 1) continue;
+                try {
+                    try { m.setAccessible(true); } catch (RuntimeException ignored) { }
+                    instance = m.invoke(provider, mc);
+                } catch (ReflectiveOperationException ignored) { }
+                if (instance != null) break;
+            }
+            if (instance == null) instance = invokeNoArgs(provider, "getPrimaryBaritone");
+            if (instance == null) return false;
+            baritoneInstance = instance;
+            baritonePathing = invokeNoArgs(instance, "getPathingBehavior");
+            baritoneGoalProcess = invokeNoArgs(instance, "getCustomGoalProcess");
+            baritoneSettings = api.getMethod("getSettings").invoke(null);
+            captureBaritoneSettings();
+            return baritonePathing != null && baritoneGoalProcess != null;
+        } catch (Throwable ex) {
+            baritoneInstance = null;
+            baritonePathing = null;
+            baritoneGoalProcess = null;
+            baritoneSettings = null;
+            return false;
+        }
+    }
+
+    static void cancelBaritoneNavigation() {
+        if (baritoneNavigating && baritonePathing != null) {
+            try { invokeNoArgs(baritonePathing, "cancelEverything"); } catch (Throwable ignored) { }
+        }
+        baritoneNavigating = false;
+        baritoneGoal = null;
+        baritoneNavTicks = 0;
+        restoreBaritoneSettings();
+    }
+
+    static boolean startBaritoneNavigation(Minecraft mc, BlockPos goal) {
+        if (!initBaritone(mc)) {
+            if (!baritoneWarned) {
+                baritoneWarned = true;
+                AutoSandOrders.msg(mc.player, "Không tìm thấy Baritone API; dùng bộ tìm đường dự phòng của AutoSand.");
+            }
+            return false;
+        }
+        try {
+            applyBaritoneNavigationSafety();
+            Class<?> goalClass = Class.forName("baritone.api.pathing.goals.GoalBlock");
+            Constructor<?> ctor = goalClass.getConstructor(int.class, int.class, int.class);
+            Object goalObject = ctor.newInstance(goal.getX(), goal.getY(), goal.getZ());
+            Method setGoal = null;
+            for (Method m : baritoneGoalProcess.getClass().getMethods()) {
+                if (m.getName().equals("setGoal") && m.getParameterCount() == 1) { setGoal = m; break; }
+            }
+            if (setGoal == null) throw new NoSuchMethodException("setGoal");
+            try { setGoal.setAccessible(true); } catch (RuntimeException ignored) { }
+            setGoal.invoke(baritoneGoalProcess, goalObject);
+            invokeNoArgs(baritoneGoalProcess, "path");
+            baritoneGoal = goal.immutable();
+            baritoneNavTicks = 0;
+            baritoneNavigating = true;
+            return true;
+        } catch (Throwable ex) {
+            cancelBaritoneNavigation();
+            return false;
+        }
+    }
+
+    static int followBaritonePath(Minecraft mc, LocalPlayer p) {
+        if (path == null || path.isEmpty()) return DONE;
+        if (baritoneFallbackPath != path) baritoneFallbackPath = null;
+        if (baritoneFallbackPath == path) return -1; // đường này đã chuyển sang A* dự phòng
+        if (!baritoneNavigating) {
+            BlockPos destination = path.get(path.size() - 1);
+            if (!startBaritoneNavigation(mc, destination)) {
+                baritoneFallbackPath = path;
+                return -1; // fallback to AutoSand's A* controller
+            }
+        }
+        baritoneNavTicks++;
+        BlockPos current = p.blockPosition();
+        boolean arrived = baritoneGoal != null
+            && Math.hypot(current.getX() - baritoneGoal.getX(), current.getZ() - baritoneGoal.getZ()) <= 1.0
+            && Math.abs(current.getY() - baritoneGoal.getY()) <= 2;
+        if (arrived) {
+            cancelBaritoneNavigation();
+            return DONE;
+        }
+        try {
+            boolean activePath = Boolean.TRUE.equals(invokeNoArgs(baritonePathing, "isPathing"));
+            if (!activePath && baritoneNavTicks > 20) {
+                cancelBaritoneNavigation();
+                baritoneFallbackPath = path;
+                return -1;
+            }
+        } catch (Throwable ignored) { }
+        if (baritoneNavTicks > TRAVEL_TIMEOUT) {
+            cancelBaritoneNavigation();
+            baritoneFallbackPath = path;
+            return -1;
+        }
+        return RUN;
+    }
+
+    /** Đi theo path[pi...]. Baritone chỉ điều hướng đến đích của A*; AutoSand vẫn tự đào. */
     static int followPath(Minecraft mc, LocalPlayer p, ClientLevel lv) {
         if (path == null) return DONE;
+        int baritoneResult = followBaritonePath(mc, p);
+        if (baritoneResult >= 0) return baritoneResult;
         Vec3 pos = p.position();
         while (pi < path.size()) {
             BlockPos q = path.get(pi);
