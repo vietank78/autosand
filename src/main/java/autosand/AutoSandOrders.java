@@ -223,8 +223,8 @@ public class AutoSandOrders implements ClientModInitializer {
     static boolean autoRejoin = true;       // bị kick ra sảnh -> la bàn -> KingSMP
     static boolean usePearl = true;         // chết xa -> mua ngọc Ender ném tới chỗ chết
     static boolean autoTotem = true;        // tay trái luôn cầm totem; dùng mất thì mua lại ở /shop -> GEAR
-    static int mineSpeed = 100;             // tốc độ đào của chế độ "Tự đào" (% so với bình thường)
-    static final int[] SPEED_LEVELS = {100, 75, 50, 33, 20, 10};
+    static int mineSpeed = 300;             // hệ số gọi phá khối; máy chủ vẫn quyết định tốc độ thực tế
+    static final int[] SPEED_LEVELS = {500, 400, 300, 200, 150, 100};
     static double pricePerSand = 5.0;       // ước tính tiền / 1 cát giao đơn (chỉnh bằng /autosand price <số>)
     static long statSand = 0, statTicks = 0;
     static int statDeaths = 0;
@@ -304,7 +304,7 @@ public class AutoSandOrders implements ClientModInitializer {
                         return 1;
                     }))
                 .then(ClientCommandManager.literal("speed").requires(src -> License.valid())
-                    .then(ClientCommandManager.argument("percent", com.mojang.brigadier.arguments.IntegerArgumentType.integer(5, 100))
+                    .then(ClientCommandManager.argument("percent", com.mojang.brigadier.arguments.IntegerArgumentType.integer(5, 500))
                         .executes(ctx -> {
                             mineSpeed = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(ctx, "percent");
                             save();
@@ -993,16 +993,16 @@ public class AutoSandOrders implements ClientModInitializer {
             AutoMiner.autoRespawn = pBool(pr, "autoRespawn", true);
             AutoMiner.digThrough = pBool(pr, "digThrough", true);
             AutoMiner.scanRadius = pInt(pr, "scanRadius", 16);
-            AutoMiner.tunnel = pBool(pr, "tunnel", false);
+            AutoMiner.tunnel = false;
             AutoMiner.tunnelLayers = pInt(pr, "tunnelLayers", 3);
             AutoMiner.tunnelWidth = pInt(pr, "tunnelWidth", 3);
             AutoMiner.tunnelBelow = pInt(pr, "tunnelBelow", 0);
-            AutoMiner.shaft = pBool(pr, "shaft", false);
+            AutoMiner.shaft = false;
             autoRejoin = pBool(pr, "autoRejoin", true);
             usePearl = pBool(pr, "usePearl", true);
             autoTotem = pBool(pr, "autoTotem", true);
-            mineSpeed = pInt(pr, "mineSpeed", 100);
-            if (mineSpeed < 5 || mineSpeed > 100) mineSpeed = 100;
+            mineSpeed = pInt(pr, "mineSpeed", 300);
+            if (mineSpeed < 5 || mineSpeed > 500) mineSpeed = 300;
             pricePerSand = pDbl(pr, "pricePerSand", 5);
             statSand = pLong(pr, "statSand", 0L);
             statTicks = pLong(pr, "statTicks", 0L);
@@ -1051,7 +1051,7 @@ public class AutoSandOrders implements ClientModInitializer {
         eatBelow = clampI(eatBelow, 1, 19);
         eatUntil = clampI(eatUntil, Math.min(20, eatBelow + 1), 20);
         pickupRadius = clampI(pickupRadius, 0, 32);
-        mineSpeed = clampI(mineSpeed, 5, 100);
+        mineSpeed = clampI(mineSpeed, 5, 500);
         defenseRadius = clampI(defenseRadius, 2, 16);
         fgFps = clampI(fgFps, 10, 260);
         bgFps = clampI(bgFps, 1, 60);
@@ -1090,14 +1090,9 @@ public class AutoSandOrders implements ClientModInitializer {
                 case "maxXpSpend" -> maxXpSpend = Double.parseDouble(v);
                 case "maxTotemUnitPrice" -> maxTotemUnitPrice = Double.parseDouble(v);
                 case "maxTotemSpend" -> maxTotemSpend = Double.parseDouble(v);
-                case "tunnel" -> AutoMiner.tunnel = Boolean.parseBoolean(v);
-                case "tunnelLayers" -> AutoMiner.tunnelLayers = Integer.parseInt(v);
-                case "tunnelWidth" -> AutoMiner.tunnelWidth = Integer.parseInt(v);
-                case "tunnelBelow" -> AutoMiner.tunnelBelow = Integer.parseInt(v);
-                case "shaft" -> AutoMiner.shaft = Boolean.parseBoolean(v);
                 case "autoDefend" -> autoDefend = Boolean.parseBoolean(v);
                 case "lowLoad" -> lowLoad = Boolean.parseBoolean(v);
-                default -> { return "Không có mục \"" + name + "\". Xem danh sách trong /autosand set (mendPct, mendUntil, eatBelow, eatUntil, pickup, defenseRadius, fgFps, bgFps, lowLoadView, minSandPrice, maxXpUnitPrice, maxXpSpend, maxTotemUnitPrice, maxTotemSpend, autoDefend, lowLoad, tunnel, tunnelLayers, tunnelWidth, tunnelBelow, shaft)."; }
+                default -> { return "Không có mục \"" + name + "\". Xem danh sách trong /autosand set (mendPct, mendUntil, eatBelow, eatUntil, pickup, defenseRadius, fgFps, bgFps, lowLoadView, minSandPrice, maxXpUnitPrice, maxXpSpend, maxTotemUnitPrice, maxTotemSpend, autoDefend, lowLoad)."; }
             }
         } catch (NumberFormatException e) {
             return "Giá trị không hợp lệ: " + v;
@@ -1133,11 +1128,6 @@ public class AutoSandOrders implements ClientModInitializer {
             pr.setProperty("autoRespawn", String.valueOf(AutoMiner.autoRespawn));
             pr.setProperty("digThrough", String.valueOf(AutoMiner.digThrough));
             pr.setProperty("scanRadius", String.valueOf(AutoMiner.scanRadius));
-            pr.setProperty("tunnel", String.valueOf(AutoMiner.tunnel));
-            pr.setProperty("tunnelLayers", String.valueOf(AutoMiner.tunnelLayers));
-            pr.setProperty("tunnelWidth", String.valueOf(AutoMiner.tunnelWidth));
-            pr.setProperty("tunnelBelow", String.valueOf(AutoMiner.tunnelBelow));
-            pr.setProperty("shaft", String.valueOf(AutoMiner.shaft));
             pr.setProperty("autoRejoin", String.valueOf(autoRejoin));
             pr.setProperty("usePearl", String.valueOf(usePearl));
             pr.setProperty("autoTotem", String.valueOf(autoTotem));
@@ -3772,7 +3762,7 @@ public class AutoSandOrders implements ClientModInitializer {
 
     static class AutoSandScreen extends Screen {
         static final int PW = 392, SIDE = 94;
-        static final String[] TABS = {"Chính", "Đào cát", "Sinh tồn", "An toàn", "Tự đào", "Thống kê", "Nâng cao", "Đào hầm"};
+        static final String[] TABS = {"Chính", "Đào cát", "Sinh tồn", "An toàn", "Tự đào", "Thống kê", "Nâng cao"};
         static final int[] TAB_COL = {0xFF7CD4FF, 0xFFF6C85F, 0xFF6EE79A, 0xFFFF6B81, 0xFF2DD4BF, 0xFFF472B6, 0xFFA78BFA, 0xFFFFA94D};
         static final int TXT = 0xFFFFFFFF, MUTED = 0xFF8E94BC;
         // Bảng màu theo trang web lấy key (SNAD PREMIUM): nền xanh đen, thẻ viền tím xanh, nút xanh lá 3D, thẻ sự kiện vàng
@@ -3967,7 +3957,7 @@ public class AutoSandOrders implements ClientModInitializer {
                     });
                     toggle(4, "Tự giao cát", "Đầy túi -> /orders -> giao vào đơn cát", () -> autoDeliver, v -> autoDeliver = v);
                     toggle(5, "Tự bật lại khi dừng", "Nuker dừng hoặc lỗi -> bật lại", () -> autoRevive, v -> autoRevive = v);
-                    cycle(6, "Tốc độ đào", "Chế độ Tự đào: giảm % để đào chậm lại", () -> mineSpeed + "%", () -> {
+                    cycle(6, "Tốc độ đào", "Hệ số gọi phá khối (máy chủ vẫn giới hạn tốc độ thực tế)", () -> mineSpeed + "%", () -> {
                         int next = SPEED_LEVELS[0];
                         for (int v : SPEED_LEVELS) {
                             if (v < mineSpeed) { next = v; break; }
@@ -4019,33 +4009,7 @@ public class AutoSandOrders implements ClientModInitializer {
                     toggle(4, "Bị kick -> về KingSMP", "Ra sảnh: bấm la bàn chọn KingSMP, đào tiếp", () -> autoRejoin, v -> autoRejoin = v);
                     toggle(5, "Dùng ngọc Ender", "Chết xa: mua ngọc ở /shop, ném tới chỗ chết", () -> usePearl, v -> usePearl = v);
                 }
-                case 7 -> {
-                    begin(4);
-                    toggle(0, "Đào hầm nhiều lớp", "Đào cả mặt cắt nhiều lớp cát cùng lúc (chế độ Tự đào)", () -> AutoMiner.tunnel, v -> {
-                        AutoMiner.tunnel = v;
-                        AutoMiner.tunnelInit = false;
-                        AutoMiner.tunnelPause = 0;
-                        AutoMiner.tunnelTurns = 0;
-                    });
-                    cycle(1, "Số lớp (chiều cao)", "Số lớp cát đào cùng lúc, tính từ chân lên trên", () -> AutoMiner.tunnelLayers + " lớp", () -> {
-                        AutoMiner.tunnelLayers = nextInt(AutoMiner.TUNNEL_LAYER_LEVELS, AutoMiner.tunnelLayers);
-                        AutoMiner.tunnelBelow = Math.min(AutoMiner.tunnelBelow, AutoMiner.tunnelLayers - 1);
-                        AutoMiner.tunnelInit = false;
-                    });
-                    cycle(2, "Độ rộng hầm", "Số cột cát đào ngang cùng lúc", () -> AutoMiner.tunnelWidth + " ô", () -> {
-                        AutoMiner.tunnelWidth = nextInt(AutoMiner.TUNNEL_WIDTH_LEVELS, AutoMiner.tunnelWidth);
-                        AutoMiner.tunnelInit = false;
-                    });
-                    cycle(3, "Đào xuống dưới chân", "Số lớp đào xuống thấp hơn chỗ đang đứng", () -> AutoMiner.tunnelBelow == 0 ? "tắt" : AutoMiner.tunnelBelow + " lớp", () -> {
-                        AutoMiner.tunnelBelow = nextInt(AutoMiner.TUNNEL_BELOW_LEVELS, AutoMiner.tunnelBelow);
-                        if (AutoMiner.tunnelBelow > AutoMiner.tunnelLayers - 1) AutoMiner.tunnelBelow = 0;
-                        AutoMiner.tunnelInit = false;
-                    });
-                    toggle(4, "Đào giếng xuống (cát)", "Sa mạc: đào hết cát quanh chân rồi đào xuống dưới chân, lặp lại", () -> AutoMiner.shaft, v -> {
-                        AutoMiner.shaft = v;
-                        AutoMiner.shaftInit = false;
-                    });
-                }
+
                 case 6 -> {
                     begin(7);
                     toggle(0, "Tự phòng thủ", "Quái thù địch lại gần -> cầm kiếm / rìu đánh rồi đào tiếp", () -> autoDefend, v -> autoDefend = v);
@@ -4594,14 +4558,14 @@ final class AutoMiner {
         }
 
         // 1c) đào giếng xuống (nếu bật, chạy thay cho đào hầm)
-        if (shaft && planShaft(p, lv)) {
+        if (false && shaft && planShaft(p, lv)) {
             noTarget = 0;
             exploreCount = 0;
             return;
         }
 
         // 1b) đào hầm nhiều lớp (nếu bật)
-        if (tunnel && !shaft && tunnelPause <= 0 && planTunnel(mc, p, lv)) {
+        if (false && tunnel && !shaft && tunnelPause <= 0 && planTunnel(mc, p, lv)) {
             noTarget = 0;
             exploreCount = 0;
             return;
@@ -4809,43 +4773,49 @@ final class AutoMiner {
         return false;
     }
 
-    static boolean planToSand(LocalPlayer p, ClientLevel lv) {
-        List<BlockPos> cands = scanSand(lv, p);
-        if (cands.isEmpty()) return false;
-        Vec3 eye = p.getEyePosition();
+    static final int NEAR_RADIUS = 5;
 
-        // đang trong tầm với: đào luôn, khỏi đi
-        for (BlockPos c : cands) {
-            if (canMineFromEye(lv, p, eye, c)) {
-                target = c;
-                path = null;
-                ph = P_MINE;
-                phTicks = 0;
-                return true;
+    /** Chọn cát gần người chơi, ưu tiên khối sát cạnh và bên dưới chân. */
+    static BlockPos findBestNearSand(ClientLevel lv, LocalPlayer p) {
+        BlockPos origin = p.blockPosition();
+        List<BlockPos> list = new ArrayList<>();
+        for (int dx = -NEAR_RADIUS; dx <= NEAR_RADIUS; dx++) {
+            for (int dz = -NEAR_RADIUS; dz <= NEAR_RADIUS; dz++) {
+                for (int dy = -3; dy <= 4; dy++) {
+                    BlockPos bp = origin.offset(dx, dy, dz);
+                    if (!lv.getBlockState(bp).is(Blocks.SAND)) continue;
+                    if (ignoreBlocks.contains(bp.asLong())) continue;
+                    if (waterWithin(lv, bp, 1)) continue;
+                    list.add(bp);
+                }
             }
         }
-        BlockPos start = p.blockPosition();
-        int tries = 0;
-        for (BlockPos c : cands) {
-            if (tries++ >= 5) break;
-            Vec3 ct = Vec3.atCenterOf(c);
-            List<BlockPos> r = findPath(lv, start, ct, q -> {
-                if (colBlocked(q, c)) return false;
-                Vec3 e = new Vec3(q.getX() + 0.5, q.getY() + EYE_H, q.getZ() + 0.5);
-                return canMineFromEye(lv, p, e, c);
-            }, MAX_NODES, false);
-            if (r != null) {
-                target = c;
-                path = r;
-                pi = 0;
-                stuck = 0;
-                phTicks = 0;
-                ph = r.isEmpty() ? P_MINE : P_MOVE;
-                return true;
-            }
-            ignoreBlocks.add(c.asLong());
+        list.sort(Comparator.comparingDouble(c -> scoreNear(p, c)));
+        Vec3 eye = p.getEyePosition();
+        for (BlockPos c : list) {
+            if (canMineFromEye(lv, p, eye, c)) return c;
         }
-        return false;
+        return null;
+    }
+
+    static double scoreNear(LocalPlayer p, BlockPos b) {
+        double dx = b.getX() + 0.5 - p.getX();
+        double dz = b.getZ() + 0.5 - p.getZ();
+        double dist = Math.hypot(dx, dz);
+        int dy = b.getY() - p.blockPosition().getY();
+        if (dy < 0 && dist < 1.6) return dist - 15.0;
+        if (Math.abs(dy) <= 1 && dist < 2.8) return dist - 6.0;
+        return dist + Math.abs(dy) * 0.5;
+    }
+
+    static boolean planToSand(LocalPlayer p, ClientLevel lv) {
+        BlockPos c = findBestNearSand(lv, p);
+        if (c == null) return false;
+        target = c;
+        path = null;
+        ph = P_MINE;
+        phTicks = 0;
+        return true;
     }
 
     static boolean planExplore(ClientLevel lv, LocalPlayer p) {
@@ -5096,19 +5066,24 @@ final class AutoMiner {
         digBlock(mc, p, t);
     }
 
+    static int digAcc = 0;
+
     static void digBlock(Minecraft mc, LocalPlayer p, BlockPos b) {
         Vec3 c = Vec3.atCenterOf(b);
         aimAt(p, c);
         ensureShovel(p);
         Vec3 e = p.getEyePosition();
         Direction face = Direction.getApproximateNearest(e.x - c.x, e.y - c.y, e.z - c.z);
-        digAcc += AutoSandOrders.mineSpeed;                      // 100% = đào mỗi tick; thấp hơn = bỏ bớt tick đào
-        if (digAcc < 100) return;
-        digAcc -= 100;
-        mc.gameMode.continueDestroyBlock(b, face);
-        p.swing(InteractionHand.MAIN_HAND);
+        digAcc = Math.min(10000, digAcc + mineSpeed);
+        int calls = 0;
+        while (digAcc >= 100 && calls < 5) {
+            digAcc -= 100;
+            mc.gameMode.continueDestroyBlock(b, face);
+            p.swing(InteractionHand.MAIN_HAND);
+            calls++;
+            if (mc.level.getBlockState(b).isAir()) { digAcc = 0; break; }
+        }
     }
-    static int digAcc = 0;
 
     static void aimAt(LocalPlayer p, Vec3 t) {
         Vec3 e = p.getEyePosition();
