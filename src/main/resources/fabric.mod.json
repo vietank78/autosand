@@ -14,5 +14,10 @@
     "minecraft": "~1.21.11",
     "java": ">=21",
     "fabric-api": "*"
-  }
+  },
+  "jars": [
+    {
+      "file": "META-INF/jars/baritone-1.17.0.jar"
+    }
+  ]
 }
