@@ -21,17 +21,16 @@ dependencies {
     mappings loom.officialMojangMappings()
     modImplementation 'net.fabricmc:fabric-loader:0.18.1'
     modImplementation 'net.fabricmc.fabric-api:fabric-api:0.141.1+1.21.11'
+
+    // Baritone: cần để biên dịch BaritoneBridge (sửa lỗi "package baritone.api does not exist")
+    modCompileOnly files('libs/baritone-1.17.0.jar')
+    // Đóng gói Baritone như một mod lồng trong jar (Loom tự ghi vào fabric.mod.json)
+    include files('libs/baritone-1.17.0.jar')
+    // Dùng khi chạy thử runClient
+    modLocalRuntime files('libs/baritone-1.17.0.jar')
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.release = 21
     options.encoding = 'UTF-8'
-}
-
-// Bundle Baritone as a nested Fabric mod so users install only the AutoSand JAR.
-tasks.named('jar') {
-    from('libs/baritone-1.17.0.jar') {
-        into 'META-INF/jars'
-        rename { 'baritone-1.17.0.jar' }
-    }
 }
