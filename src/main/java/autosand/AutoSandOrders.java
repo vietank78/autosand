@@ -22,6 +22,9 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallba
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
+import baritone.api.BaritoneAPI;
+import baritone.api.IBaritone;
+import baritone.api.pathing.goals.GoalGetToBlock;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -4375,14 +4378,8 @@ final class AutoMiner {
     static Vec3 lastPos = null;
 
     // Tích hợp Baritone chỉ làm điều hướng; AutoSand vẫn tự quản lý đào cát.
-    // Dùng reflection để mod vẫn biên dịch/chạy được khi Baritone chưa được cài.
+    // Gọi thẳng API Baritone 1.17.0 qua BaritoneBridge; Baritone chưa cài thì tự động dùng A* dự phòng.
     static boolean baritoneOwnsPath = false;
-    static Object baritoneInstance = null;
-    static Object baritoneAllowBreakSetting = null, baritoneAllowPlaceSetting = null;
-    static Object baritoneOldAllowBreak = null, baritoneOldAllowPlace = null;
-    static boolean baritoneSettingsCaptured = false;
-    static String baritoneLastError = "";
-    static boolean baritoneErrorLogged = false;
     static double exploreYaw = 0;
     static long failKey = Long.MIN_VALUE;
     static int failCount = 0;
@@ -5006,101 +5003,19 @@ final class AutoMiner {
         return hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(sand);
     }
 
-    /** Load API qua classloader của mod/context để tương thích Fabric/Knot và mod classloaders. */
-    static Class<?> loadBaritoneClass(String name) throws ClassNotFoundException {
-        ClassLoader[] loaders = new ClassLoader[] {
-            AutoSandOrders.class.getClassLoader(),
-            Thread.currentThread().getContextClassLoader(),
-            ClassLoader.getSystemClassLoader()
-        };
-        for (ClassLoader loader : loaders) {
-            if (loader == null) continue;
-            try { return Class.forName(name, true, loader); }
-            catch (ClassNotFoundException ignored) { }
-            catch (LinkageError ignored) { }
-        }
-        throw new ClassNotFoundException(name + " (tried AutoSand/context/system classloaders)");
-    }
-
-    /** Khởi chạy Baritone tới cạnh cát. Trả false nếu Baritone không có hoặc đang chạy lệnh khác. */
+    /** Khởi chạy Baritone tới cạnh cát (gọi thẳng API qua BaritoneBridge). False nếu Baritone không có / đang bận lệnh khác. */
     static boolean startBaritoneToSand(BlockPos sand) {
-        try {
-            Class<?> api = loadBaritoneClass("baritone.api.BaritoneAPI");
-            Object provider = api.getMethod("getProvider").invoke(null);
-            Class<?> providerType = loadBaritoneClass("baritone.api.IBaritoneProvider");
-            Object baritone = providerType.getMethod("getPrimaryBaritone").invoke(provider);
-            Class<?> baritoneType = loadBaritoneClass("baritone.api.IBaritone");
-            Object behavior = baritoneType.getMethod("getPathingBehavior").invoke(baritone);
-            Class<?> behaviorType = loadBaritoneClass("baritone.api.behavior.IPathingBehavior");
-            boolean currentlyPathing = (Boolean) behaviorType.getMethod("isPathing").invoke(behavior);
-            if (currentlyPathing && !baritoneOwnsPath) return false; // không chiếm lệnh Baritone do người dùng tự chạy
-
-            captureAndRestrictBaritoneSettings(api);
-            Object process = baritoneType.getMethod("getCustomGoalProcess").invoke(baritone);
-            Class<?> goalClass = loadBaritoneClass("baritone.api.pathing.goals.GoalGetToBlock");
-            // Baritone 1.17 API constructor takes Minecraft BlockPos, not three ints.
-            Object goal = goalClass.getConstructor(BlockPos.class).newInstance(sand);
-            Class<?> goalInterface = loadBaritoneClass("baritone.api.pathing.goals.Goal");
-            Class<?> processType = loadBaritoneClass("baritone.api.process.ICustomGoalProcess");
-            processType.getMethod("setGoalAndPath", goalInterface).invoke(process, goal);
-            baritoneInstance = baritone;
-            baritoneOwnsPath = true;
-            return true;
-        } catch (Throwable error) {
-            Throwable root = error;
-            while (root.getCause() != null && root.getCause() != root) root = root.getCause();
-            baritoneLastError = root.getClass().getSimpleName() + ": " + String.valueOf(root.getMessage());
-            if (!baritoneErrorLogged) {
-                System.err.println("[AutoSand] Baritone runtime integration failed: " + baritoneLastError);
-                baritoneErrorLogged = true;
-            }
-            restoreBaritoneSettings();
-            baritoneInstance = null;
-            baritoneOwnsPath = false;
-            return false;
-        }
-    }
-
-    /** Tạm cấm Baritone tự phá/đặt khối trong lúc AutoSand chỉ mượn nó để đi đường. */
-    static void captureAndRestrictBaritoneSettings(Class<?> api) throws ReflectiveOperationException {
-        if (baritoneSettingsCaptured) return;
-        Object settings = api.getMethod("getSettings").invoke(null);
-        baritoneAllowBreakSetting = settings.getClass().getField("allowBreak").get(settings);
-        baritoneAllowPlaceSetting = settings.getClass().getField("allowPlace").get(settings);
-        java.lang.reflect.Field value = baritoneAllowBreakSetting.getClass().getField("value");
-        baritoneOldAllowBreak = value.get(baritoneAllowBreakSetting);
-        baritoneOldAllowPlace = value.get(baritoneAllowPlaceSetting);
-        value.set(baritoneAllowBreakSetting, Boolean.FALSE);
-        value.set(baritoneAllowPlaceSetting, Boolean.FALSE);
-        baritoneSettingsCaptured = true;
+        baritoneOwnsPath = BaritoneBridge.goTo(sand);
+        return baritoneOwnsPath;
     }
 
     static void restoreBaritoneSettings() {
-        if (!baritoneSettingsCaptured) return;
-        try {
-            java.lang.reflect.Field value = baritoneAllowBreakSetting.getClass().getField("value");
-            value.set(baritoneAllowBreakSetting, baritoneOldAllowBreak);
-            value.set(baritoneAllowPlaceSetting, baritoneOldAllowPlace);
-        } catch (Throwable ignored) { }
-        baritoneAllowBreakSetting = null;
-        baritoneAllowPlaceSetting = null;
-        baritoneOldAllowBreak = null;
-        baritoneOldAllowPlace = null;
-        baritoneSettingsCaptured = false;
+        BaritoneBridge.restore();
     }
 
     static void cancelBaritoneNavigation() {
-        if (baritoneOwnsPath && baritoneInstance != null) {
-            try {
-                Class<?> baritoneType = loadBaritoneClass("baritone.api.IBaritone");
-                Object behavior = baritoneType.getMethod("getPathingBehavior").invoke(baritoneInstance);
-                Class<?> behaviorType = loadBaritoneClass("baritone.api.behavior.IPathingBehavior");
-                behaviorType.getMethod("cancelEverything").invoke(behavior);
-            } catch (Throwable ignored) { }
-        }
+        if (baritoneOwnsPath) BaritoneBridge.cancel();
         baritoneOwnsPath = false;
-        baritoneInstance = null;
-        restoreBaritoneSettings();
     }
 
     /** RUN khi Baritone vẫn đi; DONE khi đã tới; FAIL khi cần dùng đường dự phòng. */
@@ -5113,30 +5028,17 @@ final class AutoMiner {
             scanCool = 2;
             return FAIL;
         }
-        try {
-            Class<?> baritoneType = loadBaritoneClass("baritone.api.IBaritone");
-            Object behavior = baritoneType.getMethod("getPathingBehavior").invoke(baritoneInstance);
-            Class<?> behaviorType = loadBaritoneClass("baritone.api.behavior.IPathingBehavior");
-            boolean moving = (Boolean) behaviorType.getMethod("isPathing").invoke(behavior);
-            Object inProgress = behaviorType.getMethod("getInProgress").invoke(behavior);
-            boolean calculating = (Boolean) inProgress.getClass().getMethod("isPresent").invoke(inProgress);
-            if (moving || calculating) return RUN; // không chạm phím WASD khi Baritone đang đi/tính đường
-        } catch (Throwable ignored) {
-            cancelBaritoneNavigation();
-            return FAIL;
-        }
+        if (BaritoneBridge.isBusy()) return RUN; // không chạm phím WASD khi Baritone đang đi/tính đường
 
         // Baritone đã kết thúc lộ trình. Khôi phục thiết lập của người dùng trước khi đào.
         if (canMineFromEye(lv, p, p.getEyePosition(), target)) {
             baritoneOwnsPath = false;
-            baritoneInstance = null;
             restoreBaritoneSettings();
             return DONE;
         }
         // Cho Baritone vài tick để bắt đầu/tái lập đường sau setGoalAndPath, tránh fallback quá sớm.
         if (phTicks < 12) return RUN;
         baritoneOwnsPath = false;
-        baritoneInstance = null;
         restoreBaritoneSettings();
 
         // Đã tới vùng gần khối nhưng góc nhìn chưa thông: chuyển sang A* cục bộ làm phương án dự phòng.
@@ -6304,5 +6206,75 @@ final class AutoMiner {
         }
         if (Float.isNaN(best) || bestErr > 6.0) return null;
         return new float[] {yaw, best};
+    }
+}
+
+/**
+ * Cầu nối Baritone 1.17.0 (Minecraft 1.21.11) gọi trực tiếp API, thay cho đoạn reflection trong AutoMiner.
+ * Chưa biên dịch kiểm chứng: cần jar Baritone được Loom remap sang Mojang (xem build.gradle).
+ * Mọi hàm đều an toàn khi Baritone chưa cài (trả false, không ném lỗi).
+ */
+final class BaritoneBridge {
+    private BaritoneBridge() { }
+
+    private static boolean owns = false;
+    private static Boolean oldBreak, oldPlace;
+
+    static boolean installed() {
+        return FabricLoader.getInstance().isModLoaded("baritone");
+    }
+
+    private static IBaritone get() {
+        return BaritoneAPI.getProvider().getPrimaryBaritone();
+    }
+
+    /** Đi tới cạnh khối; Baritone chỉ điều hướng, không tự phá/đặt khối. Trả false nếu không dùng được. */
+    static boolean goTo(BlockPos pos) {
+        if (!installed()) return false;
+        try {
+            IBaritone b = get();
+            if (b.getPathingBehavior().isPathing() && !owns) return false;   // không giành lệnh người dùng tự chạy
+            if (oldBreak == null) {
+                oldBreak = BaritoneAPI.getSettings().allowBreak.value;
+                oldPlace = BaritoneAPI.getSettings().allowPlace.value;
+            }
+            BaritoneAPI.getSettings().allowBreak.value = false;
+            BaritoneAPI.getSettings().allowPlace.value = false;
+            b.getCustomGoalProcess().setGoalAndPath(new GoalGetToBlock(pos));
+            owns = true;
+            return true;
+        } catch (Throwable t) {
+            restore();
+            return false;
+        }
+    }
+
+    static boolean isPathing() {
+        try { return installed() && get().getPathingBehavior().isPathing(); }
+        catch (Throwable t) { return false; }
+    }
+
+    /** Đang đi hoặc đang tính đường. */
+    static boolean isBusy() {
+        try {
+            if (!installed()) return false;
+            var pb = get().getPathingBehavior();
+            return pb.isPathing() || pb.getInProgress().isPresent();
+        } catch (Throwable t) { return false; }
+    }
+
+    static void cancel() {
+        try { if (owns && installed()) get().getPathingBehavior().cancelEverything(); }
+        catch (Throwable ignored) { }
+        owns = false;
+        restore();
+    }
+
+    static void restore() {
+        try {
+            if (oldBreak != null) BaritoneAPI.getSettings().allowBreak.value = oldBreak;
+            if (oldPlace != null) BaritoneAPI.getSettings().allowPlace.value = oldPlace;
+        } catch (Throwable ignored) { }
+        oldBreak = oldPlace = null;
     }
 }
