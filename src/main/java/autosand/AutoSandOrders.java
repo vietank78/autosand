@@ -260,6 +260,9 @@ public class AutoSandOrders implements ClientModInitializer {
     static int rejoinWait = 0;
     static boolean buyFood = false, foodWarn = false;            // đang mua đồ ăn (thay vì bình XP)
     static int foodBuyFails = 0, junkCool = 0, junkStep = 0, junkDropped = 0, eatPrevSlot = -1;
+    static int eatIdle = 0, eatLastFood = 0;
+    static int eatTries = 0, eatOffFrom = -1;
+    static boolean eatOff = false;                              // đang ăn bằng tay trái (dự phòng)                    // tick chưa bắt đầu ăn / mức đói lần trước
     static float eatXRot = Float.NaN, junkXRot = Float.NaN;
     static boolean shovelSwapped = false, needBuy = false;
     static boolean buyPearl = false;
@@ -1322,6 +1325,10 @@ public class AutoSandOrders implements ClientModInitializer {
             if (autoEat && p.getFoodData().getFoodLevel() <= eatBelow) {
                 if (findFood(p) >= 0) { foodWarn = false; startEat(mc, p); return; }
                 if (autoBuyFood && emptySlot(p) >= 0) { startFoodBuy(mc, p); return; }
+                if (autoBuyFood && autoDeliver && countItem(p, Items.SAND) > 0) {   // túi đầy các stack cát dở: giao cát cho trống ô rồi mua
+                    startDeliver(mc, p);
+                    return;
+                }
                 if (!foodWarn) {
                     foodWarn = true;
                     msg(p, autoBuyFood
@@ -1776,25 +1783,62 @@ public class AutoSandOrders implements ClientModInitializer {
                 setSelected(p, idx);
                 eatXRot = p.getXRot();
                 p.setXRot(-90f);                         // nhìn lên trời để chuột phải không bấm trúng khối nào
+                mc.gameMode.stopDestroyBlock();          // đang dở phá khối thì game từ chối dùng đồ
+                eatIdle = 0;
+                eatTries = 0;
+                eatOff = false;
+                eatOffFrom = -1;
+                eatLastFood = p.getFoodData().getFoodLevel();
+                msg(p, "Đói (" + eatLastFood + "/20) -> ăn.");
                 state = S.EAT_USE;
                 timeout = STEP_TIMEOUT;
                 wait = 3;
             }
             case EAT_USE -> {
                 if (screenBlocks(mc)) { p.closeContainer(); wait = 2; return; }
-                if (!p.isUsingItem() && p.getFoodData().getFoodLevel() >= eatUntil) {
+                boolean using = p.isUsingItem();
+                if (!using && p.getFoodData().getFoodLevel() >= eatUntil) {
                     finishEat(mc, p, COOLDOWN_AFTER);
                     return;
                 }
-                if (!edible(p.getMainHandItem())) {      // hết stack đang cầm -> cầm stack khác
+                InteractionHand hand = eatOff ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+                if (!edible(p.getItemInHand(hand))) {    // hết stack đang cầm -> cầm stack khác
                     mc.options.keyUse.setDown(false);
+                    if (using) return;
                     int idx = findFood(p);
                     if (idx < 0) { msg(p, "Hết đồ ăn."); finishEat(mc, p, 0); return; }
-                    setSelected(p, toHotbar(mc, p, idx));
+                    if (eatOff) { swapOffhand(mc, p, idx); eatOffFrom = idx; }
+                    else setSelected(p, toHotbar(mc, p, idx));
                     wait = 3;
                     return;
                 }
-                mc.options.keyUse.setDown(true);         // giữ chuột phải tới khi ăn xong
+                int fl = p.getFoodData().getFoodLevel();
+                if (fl > eatLastFood) { eatLastFood = fl; eatTries = 0; timeout = STEP_TIMEOUT; }   // đang ăn được: không bị huỷ vì hết giờ
+                mc.options.keyUse.setDown(true);         // giữ chuột phải
+                if (using) { eatIdle = 0; return; }
+                // Game không xử lý phím chuột phải khi mở chat / ESC (kể cả mất focus), nên tự gửi lệnh dùng đồ.
+                // Không ăn được thì đổi cách thử lần lượt: nhìn ngang -> chọn lại ô -> chuyển sang tay trái.
+                if (mc.screen != null || ++eatIdle >= 4) {
+                    eatIdle = 0;
+                    eatTries++;
+                    if (eatTries == 5) { p.setXRot(0f); }                                  // có thể có khối trên đầu
+                    if (eatTries == 9 && !eatOff) {                                        // thử lại bằng tay trái
+                        int cur = getSelected(p);
+                        mc.options.keyUse.setDown(false);
+                        swapOffhand(mc, p, cur);
+                        eatOff = true;
+                        eatOffFrom = cur;
+                        wait = 4;
+                        return;
+                    }
+                    if (eatTries > 16) {
+                        abort(mc, "không ăn được dù đã thử nhiều cách");
+                        return;
+                    }
+                    mc.gameMode.stopDestroyBlock();
+                    mc.gameMode.useItem(p, hand);
+                    wait = 2;
+                }
             }
 
             default -> { }
@@ -1882,6 +1926,9 @@ public class AutoSandOrders implements ClientModInitializer {
     /** Trả lại hướng nhìn / ô đang cầm / nhả chuột phải sau khi ăn hoặc vứt đồ. */
     static void restoreLook(Minecraft mc, LocalPlayer p) {
         mc.options.keyUse.setDown(false);
+        if (eatOff && eatOffFrom >= 0 && mc.gameMode != null) { swapOffhand(mc, p, eatOffFrom); }   // trả totem về tay trái
+        eatOff = false;
+        eatOffFrom = -1;
         if (!Float.isNaN(eatXRot)) { p.setXRot(eatXRot); eatXRot = Float.NaN; }
         if (!Float.isNaN(junkXRot)) { p.setXRot(junkXRot); junkXRot = Float.NaN; }
         if (eatPrevSlot >= 0 && eatPrevSlot < 9) setSelected(p, eatPrevSlot);
@@ -2112,7 +2159,7 @@ public class AutoSandOrders implements ClientModInitializer {
     static boolean droppable(ItemStack st) {
         return !st.isEmpty() && !st.is(Items.EXPERIENCE_BOTTLE) && !st.is(ItemTags.SHOVELS)
             && !st.is(Items.GOLDEN_CARROT) && !st.is(Items.ENDER_PEARL) && !st.is(Items.TOTEM_OF_UNDYING)
-            && !isWeapon(st);
+            && !isWeapon(st) && !edible(st);
     }
 
     /** Ô 4-9 đầu tiên chứa thứ không phải bình XP và vứt được (cát, đồ khác); -1 nếu sạch. */
@@ -2232,7 +2279,7 @@ public class AutoSandOrders implements ClientModInitializer {
     static int junkSlot(LocalPlayer p) {
         for (int i = 0; i < 36; i++) {
             ItemStack st = p.getInventory().getItem(i);
-            if (!st.isEmpty() && !keepItem(st)) return i;
+            if (!st.isEmpty() && !keepItem(st) && !edible(st)) return i;   // đồ ăn dùng được thì giữ (trước đây bị vứt trước khi kịp ăn)
         }
         return -1;
     }
