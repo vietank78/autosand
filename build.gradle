@@ -9,11 +9,11 @@ base {
     archivesName = 'AutoSandNew'
 }
 
-// Tên jar Baritone đang nằm trong thư mục libs/ của repo. Đổi ở đây nếu tên file khác.
+// Jar Baritone (bản Fabric đầy đủ) nằm trong libs/. Đổi tên ở đây nếu file khác tên.
 def baritoneJarName = 'baritone-api-fabric-1.17.0.jar'
 def baritoneJar = file("libs/${baritoneJarName}")
 if (!baritoneJar.exists()) {
-    throw new GradleException("Thiếu file libs/${baritoneJarName}. Hãy commit jar Baritone vào thư mục libs/ (đúng tên này) rồi build lại.")
+    throw new GradleException("Thiếu file libs/${baritoneJarName}. Hãy commit jar Baritone vào thư mục libs/ rồi build lại.")
 }
 
 repositories {
@@ -29,13 +29,20 @@ dependencies {
     modImplementation 'net.fabricmc:fabric-loader:0.18.1'
     modImplementation 'net.fabricmc.fabric-api:fabric-api:0.141.1+1.21.11'
 
-    // Biên dịch BaritoneBridge (chỉ cần để compile, không đóng gói vào jar)
+    // Chỉ để biên dịch BaritoneBridge
     modCompileOnly files(baritoneJar)
-    // Chạy thử runClient
-    modLocalRuntime files(baritoneJar)
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.release = 21
     options.encoding = 'UTF-8'
+}
+
+// Nhúng Baritone vào trong jar của AutoSand dưới dạng mod lồng (jar-in-jar).
+// fabric.mod.json phải khai báo đường dẫn này trong mục "jars".
+tasks.named('jar') {
+    from(baritoneJar) {
+        into 'META-INF/jars'
+        rename { 'baritone.jar' }
+    }
 }
