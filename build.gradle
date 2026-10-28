@@ -9,6 +9,13 @@ base {
     archivesName = 'AutoSandNew'
 }
 
+// Tên jar Baritone đang nằm trong thư mục libs/ của repo. Đổi ở đây nếu tên file khác.
+def baritoneJarName = 'baritone-api-fabric-1.17.0.jar'
+def baritoneJar = file("libs/${baritoneJarName}")
+if (!baritoneJar.exists()) {
+    throw new GradleException("Thiếu file libs/${baritoneJarName}. Hãy commit jar Baritone vào thư mục libs/ (đúng tên này) rồi build lại.")
+}
+
 repositories {
     mavenCentral()
     maven {
@@ -22,12 +29,12 @@ dependencies {
     modImplementation 'net.fabricmc:fabric-loader:0.18.1'
     modImplementation 'net.fabricmc.fabric-api:fabric-api:0.141.1+1.21.11'
 
-    // Baritone: cần để biên dịch BaritoneBridge (sửa lỗi "package baritone.api does not exist")
-    modCompileOnly files('libs/baritone-1.17.0.jar')
-    // Đóng gói Baritone như một mod lồng trong jar (Loom tự ghi vào fabric.mod.json)
-    include files('libs/baritone-1.17.0.jar')
-    // Dùng khi chạy thử runClient
-    modLocalRuntime files('libs/baritone-1.17.0.jar')
+    // Biên dịch BaritoneBridge
+    modCompileOnly files(baritoneJar)
+    // Đóng gói Baritone lồng trong jar (Loom ghi vào fabric.mod.json)
+    include files(baritoneJar)
+    // Chạy thử runClient
+    modLocalRuntime files(baritoneJar)
 }
 
 tasks.withType(JavaCompile).configureEach {
