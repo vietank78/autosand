@@ -1,30 +1,28 @@
 package com.straighttunnel;
 
+import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-import net.minecraft.block.BlockState;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-import net.minecraft.client.gui.screen.ingame.InventoryScreen;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.util.InputUtil;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.screen.ScreenHandler;
-import net.minecraft.screen.slot.Slot;
-import net.minecraft.screen.slot.SlotActionType;
-import net.minecraft.text.Text;
-import net.minecraft.util.Hand;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.Vec3d;
-
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
@@ -88,20 +86,19 @@ public final class TunnelMiner implements ClientModInitializer {
 
 	private record Plan(List<BlockPos> targets, boolean jump, boolean blocked, BlockPos floor) {}
 
-	private static KeyBinding toggleKey;
+	private static KeyMapping toggleKey;
 
 	/** Entrypoint của mod (khai báo trong fabric.mod.json). */
 	@Override
 	public void onInitializeClient() {
-		// 1.21.9+: KeyBinding nhận KeyBinding.Category thay vì String
-		toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+		toggleKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
 			"key.straighttunnel.toggle",
-			InputUtil.Type.KEYSYM,
+			InputConstants.Type.KEYSYM,
 			GLFW.GLFW_KEY_K,
-			KeyBinding.Category.create(Identifier.of("straighttunnel", "main"))
+			KeyMapping.Category.MISC
 		));
 		ClientTickEvents.END_CLIENT_TICK.register(client -> {
-			while (toggleKey.wasPressed()) toggle(client);
+			while (toggleKey.consumeClick()) toggle(client);
 			tick(client);
 		});
 	}
@@ -110,15 +107,15 @@ public final class TunnelMiner implements ClientModInitializer {
 	// bật / tắt
 	// =====================================================================================
 
-	public static void toggle(MinecraftClient mc) {
+	public static void toggle(Minecraft mc) {
 		if (active) {
 			stop(mc, "Đã tắt đào hầm.");
 			return;
 		}
-		ClientPlayerEntity p = mc.player;
-		if (p == null || mc.world == null) return;
-		mainDir = Direction.fromHorizontalDegrees(p.getYaw());
-		laneCoord = lateral(p.getBlockPos());
+		LocalPlayer p = mc.player;
+		if (p == null || mc.level == null) return;
+		mainDir = Direction.fromYRot(p.getYRot());
+		laneCoord = lateral(p.blockPosition());
 		mode = Mode.MAIN;
 		task = Task.MINE;
 		lastPos = null;
@@ -130,20 +127,20 @@ public final class TunnelMiner implements ClientModInitializer {
 		eatSwapIdx = -1;
 		repSwapIdx = -1;
 		active = true;
-		msg(mc, "Bật đào hầm 3x3 hướng " + mainDir.asString().toUpperCase() + " (nhấn K để dừng)");
+		msg(mc, "Bật đào hầm 3x3 hướng " + mainDir.getName().toUpperCase() + " (nhấn K để dừng)");
 	}
 
-	public static void stop(MinecraftClient mc, String reason) {
+	public static void stop(Minecraft mc, String reason) {
 		active = false;
 		if (mc.options != null) {
-			mc.options.forwardKey.setPressed(false);
-			mc.options.jumpKey.setPressed(false);
-			mc.options.useKey.setPressed(false);
+			mc.options.keyUp.setDown(false);
+			mc.options.keyJump.setDown(false);
+			mc.options.keyUse.setDown(false);
 		}
-		if (mc.interactionManager != null) mc.interactionManager.cancelBlockBreaking();
+		if (mc.gameMode != null) mc.gameMode.stopDestroyBlock();
 		// trả lại đồ nếu đang đổi sang tay trái
-		ClientPlayerEntity p = mc.player;
-		if (p != null && mc.interactionManager != null && mc.currentScreen == null) {
+		LocalPlayer p = mc.player;
+		if (p != null && mc.gameMode != null && mc.screen == null) {
 			if (eatSwapIdx >= 0) { swapOffhand(mc, p, eatSwapIdx); eatSwapIdx = -1; }
 			if (repSwapIdx >= 0) { swapOffhand(mc, p, repSwapIdx); repSwapIdx = -1; }
 		}
@@ -154,15 +151,15 @@ public final class TunnelMiner implements ClientModInitializer {
 	// vòng lặp chính
 	// =====================================================================================
 
-	public static void tick(MinecraftClient mc) {
+	public static void tick(Minecraft mc) {
 		if (!active) return;
-		ClientPlayerEntity p = mc.player;
-		ClientWorld w = mc.world;
-		if (p == null || w == null || mc.interactionManager == null) {
+		LocalPlayer p = mc.player;
+		ClientLevel w = mc.level;
+		if (p == null || w == null || mc.gameMode == null) {
 			active = false;
 			return;
 		}
-		if (p.isDead()) {
+		if (!p.isAlive()) {
 			stop(mc, "Dừng: đã chết.");
 			return;
 		}
@@ -173,7 +170,7 @@ public final class TunnelMiner implements ClientModInitializer {
 			case EAT -> tickEat(mc, p);
 			case REPAIR -> tickRepair(mc, p);
 			default -> {
-				if (mc.currentScreen != null) {
+				if (mc.screen != null) {
 					idle(mc);
 					return;
 				}
@@ -182,17 +179,17 @@ public final class TunnelMiner implements ClientModInitializer {
 		}
 	}
 
-	private static void idle(MinecraftClient mc) {
-		mc.options.forwardKey.setPressed(false);
-		mc.options.jumpKey.setPressed(false);
-		if (mc.interactionManager != null) mc.interactionManager.cancelBlockBreaking();
+	private static void idle(Minecraft mc) {
+		mc.options.keyUp.setDown(false);
+		mc.options.keyJump.setDown(false);
+		if (mc.gameMode != null) mc.gameMode.stopDestroyBlock();
 	}
 
 	// =====================================================================================
 	// ĐÀO
 	// =====================================================================================
 
-	private static void tickMine(MinecraftClient mc, ClientPlayerEntity p, ClientWorld w) {
+	private static void tickMine(Minecraft mc, LocalPlayer p, ClientLevel w) {
 		// --- máu thấp -> ăn ---
 		float hp = p.getHealth() + p.getAbsorptionAmount();
 		if (hp <= EAT_HP && eatCooldown <= 0) {
@@ -204,18 +201,18 @@ public final class TunnelMiner implements ClientModInitializer {
 		}
 
 		// --- cúp sắp hỏng -> sửa ---
-		ItemStack held = p.getMainHandStack();
+		ItemStack held = p.getMainHandItem();
 		if (held.isEmpty()) {
 			stop(mc, "Dừng: tay đang trống, hãy cầm cúp.");
 			return;
 		}
-		if (held.isDamageable() && remaining(held) <= lowThreshold(held)) {
+		if (held.isDamageableItem() && remaining(held) <= lowThreshold(held)) {
 			idle(mc);
 			beginRepair();
 			return;
 		}
 
-		BlockPos feet = p.getBlockPos();
+		BlockPos feet = p.blockPosition();
 
 		// --- chuyển chế độ đường vòng ---
 		if (mode == Mode.SIDE_OUT && Math.abs(lateral(feet) - laneCoord) >= LATERAL_OFFSET) {
@@ -255,32 +252,32 @@ public final class TunnelMiner implements ClientModInitializer {
 		}
 
 		// --- khoá góc nhìn ---
-		BlockPos aim = pl.targets().isEmpty() ? feet.offset(cur).up() : pl.targets().get(0);
-		Vec3d eye = p.getEyePos();
+		BlockPos aim = pl.targets().isEmpty() ? feet.relative(cur).above() : pl.targets().get(0);
+		Vec3 eye = p.getEyePosition();
 		double ax = aim.getX() + 0.5 - eye.x;
 		double ay = aim.getY() + 0.5 - eye.y;
 		double az = aim.getZ() + 0.5 - eye.z;
 		double horiz = Math.sqrt(ax * ax + az * az);
-		p.setYaw(cur.getPositiveHorizontalDegrees());
-		p.setPitch((float) -Math.toDegrees(Math.atan2(ay, horiz)));
+		p.setYRot(cur.toYRot());
+		p.setXRot((float) -Math.toDegrees(Math.atan2(ay, horiz)));
 
 		if (!pl.targets().isEmpty()) {
-			mc.options.forwardKey.setPressed(false);
-			mc.options.jumpKey.setPressed(false);
-			mc.interactionManager.updateBlockBreakingProgress(pl.targets().get(0), cur.getOpposite());
-			p.swingHand(Hand.MAIN_HAND);
+			mc.options.keyUp.setDown(false);
+			mc.options.keyJump.setDown(false);
+			mc.gameMode.continueDestroyBlock(pl.targets().get(0), cur.getOpposite());
+			p.swing(InteractionHand.MAIN_HAND);
 			stillTicks = 0;
 			return;
 		}
 
-		mc.interactionManager.cancelBlockBreaking();
+		mc.gameMode.stopDestroyBlock();
 		if (!isSolid(w, pl.floor())) {
 			idle(mc);
 			stop(mc, "Dừng: phía trước không có sàn (hố).");
 			return;
 		}
-		mc.options.forwardKey.setPressed(true);
-		mc.options.jumpKey.setPressed(pl.jump());
+		mc.options.keyUp.setDown(true);
+		mc.options.keyJump.setDown(pl.jump());
 
 		// --- phát hiện kẹt ---
 		if (feet.equals(lastPos)) {
@@ -294,12 +291,12 @@ public final class TunnelMiner implements ClientModInitializer {
 	}
 
 	/** Lập kế hoạch cho cột block ngay phía trước theo hướng d. */
-	private static Plan plan(ClientWorld w, BlockPos feet, Direction d) {
-		BlockPos a = feet.offset(d);
+	private static Plan plan(ClientLevel w, BlockPos feet, Direction d) {
+		BlockPos a = feet.relative(d);
 		BlockPos f = a;          // block ngang chân
-		BlockPos h = a.up();     // block ngang đầu (= tâm 3x3)
-		BlockPos t = a.up(2);    // hàng trên của 3x3
-		BlockPos floor = a.down();
+		BlockPos h = a.above();     // block ngang đầu (= tâm 3x3)
+		BlockPos t = a.above(2);    // hàng trên của 3x3
+		BlockPos floor = a.below();
 
 		boolean fBad = isUnbreakable(w, f);
 		boolean hBad = isUnbreakable(w, h);
@@ -322,22 +319,22 @@ public final class TunnelMiner implements ClientModInitializer {
 		return new Plan(targets, false, true, floor);
 	}
 
-	private static boolean isSolid(ClientWorld w, BlockPos q) {
+	private static boolean isSolid(ClientLevel w, BlockPos q) {
 		return !w.getBlockState(q).getCollisionShape(w, q).isEmpty();
 	}
 
-	private static boolean isUnbreakable(ClientWorld w, BlockPos q) {
+	private static boolean isUnbreakable(ClientLevel w, BlockPos q) {
 		BlockState s = w.getBlockState(q);
-		return !s.getCollisionShape(w, q).isEmpty() && s.getHardness(w, q) < 0;
+		return !s.getCollisionShape(w, q).isEmpty() && s.getDestroySpeed(w, q) < 0;
 	}
 
 	/** Có nước/lava trong vùng 3x3 của 3 cột phía trước (kèm 1 block sàn)? */
-	private static boolean fluidAhead(ClientWorld w, BlockPos feet, Direction d) {
-		Direction perp = d.rotateYClockwise();
+	private static boolean fluidAhead(ClientLevel w, BlockPos feet, Direction d) {
+		Direction perp = d.getClockWise();
 		for (int step = 1; step <= 3; step++) {
 			for (int side = -1; side <= 1; side++) {
 				for (int up = -1; up <= 3; up++) {
-					BlockPos q = feet.offset(d, step).offset(perp, side).up(up);
+					BlockPos q = feet.relative(d, step).relative(perp, side).above(up);
 					if (!w.getFluidState(q).isEmpty()) return true;
 				}
 			}
@@ -346,14 +343,14 @@ public final class TunnelMiner implements ClientModInitializer {
 	}
 
 	/** Chọn bên để đào vòng (bên không có nước/lava). */
-	private static Direction chooseSide(ClientWorld w, BlockPos feet) {
-		Direction[] cands = { mainDir.rotateYClockwise(), mainDir.rotateYCounterclockwise() };
+	private static Direction chooseSide(ClientLevel w, BlockPos feet) {
+		Direction[] cands = { mainDir.getClockWise(), mainDir.getCounterClockWise() };
 		for (Direction side : cands) {
 			boolean ok = true;
 			for (int i = 0; i <= LATERAL_OFFSET + 1 && ok; i++) {
 				for (int f = -2; f <= 2 && ok; f++) {
 					for (int y = -1; y <= 3; y++) {
-						BlockPos q = feet.offset(side, i).offset(mainDir, f).up(y);
+						BlockPos q = feet.relative(side, i).relative(mainDir, f).above(y);
 						if (!w.getFluidState(q).isEmpty()) { ok = false; break; }
 					}
 				}
@@ -364,13 +361,13 @@ public final class TunnelMiner implements ClientModInitializer {
 	}
 
 	/** Đường quay lại làn chính (và vùng quanh nó) đã hết nước/lava chưa? */
-	private static boolean returnPathClear(ClientWorld w, BlockPos feet) {
+	private static boolean returnPathClear(ClientLevel w, BlockPos feet) {
 		Direction back = sideDir.getOpposite();
 		int dist = Math.abs(lateral(feet) - laneCoord);
 		for (int i = -1; i <= dist + 1; i++) {
 			for (int f = -2; f <= 4; f++) {
 				for (int y = -1; y <= 3; y++) {
-					BlockPos q = feet.offset(back, i).offset(mainDir, f).up(y);
+					BlockPos q = feet.relative(back, i).relative(mainDir, f).above(y);
 					if (!w.getFluidState(q).isEmpty()) return false;
 				}
 			}
@@ -399,16 +396,16 @@ public final class TunnelMiner implements ClientModInitializer {
 	// =====================================================================================
 
 	private static boolean isGapple(ItemStack s) {
-		return s.isOf(Items.GOLDEN_APPLE) || (EAT_ENCHANTED_TOO && s.isOf(Items.ENCHANTED_GOLDEN_APPLE));
+		return s.is(Items.GOLDEN_APPLE) || (EAT_ENCHANTED_TOO && s.is(Items.ENCHANTED_GOLDEN_APPLE));
 	}
 
-	private static void tickEat(MinecraftClient mc, ClientPlayerEntity p) {
+	private static void tickEat(Minecraft mc, LocalPlayer p) {
 		idle(mc);
-		if (mc.currentScreen != null) return;
+		if (mc.screen != null) return;
 
 		switch (eatStage) {
 			case 0 -> {
-				if (isGapple(p.getOffHandStack())) {
+				if (isGapple(p.getOffhandItem())) {
 					eatStage = 1;
 					return;
 				}
@@ -429,16 +426,16 @@ public final class TunnelMiner implements ClientModInitializer {
 				eatStage = 1;
 			}
 			case 1 -> {
-				mc.interactionManager.interactItem(p, Hand.OFF_HAND);
-				mc.options.useKey.setPressed(true);
+				mc.gameMode.useItem(p, InteractionHand.OFF_HAND);
+				mc.options.keyUse.setDown(true);
 				eatStage = 2;
 				eatTimer = 0;
 			}
 			case 2 -> {
-				mc.options.useKey.setPressed(true);
+				mc.options.keyUse.setDown(true);
 				eatTimer++;
 				if ((!p.isUsingItem() && eatTimer > 3) || eatTimer > 80) {
-					mc.options.useKey.setPressed(false);
+					mc.options.keyUse.setDown(false);
 					if (eatSwapIdx >= 0) {
 						swapOffhand(mc, p, eatSwapIdx);
 						eatSwapIdx = -1;
@@ -457,7 +454,7 @@ public final class TunnelMiner implements ClientModInitializer {
 	// =====================================================================================
 
 	private static boolean isXp(ItemStack s) {
-		return s.isOf(Items.EXPERIENCE_BOTTLE);
+		return s.is(Items.EXPERIENCE_BOTTLE);
 	}
 
 	private static void beginRepair() {
@@ -467,10 +464,10 @@ public final class TunnelMiner implements ClientModInitializer {
 		repairRounds++;
 	}
 
-	private static void tickRepair(MinecraftClient mc, ClientPlayerEntity p) {
+	private static void tickRepair(Minecraft mc, LocalPlayer p) {
 		idle(mc);
-		if (mc.currentScreen != null) return;
-		ItemStack held = p.getMainHandStack();
+		if (mc.screen != null) return;
+		ItemStack held = p.getMainHandItem();
 
 		switch (repStage) {
 			case 0 -> {
@@ -485,7 +482,7 @@ public final class TunnelMiner implements ClientModInitializer {
 					return;
 				}
 				shopTriedXp = false;
-				if (!isXp(p.getOffHandStack())) {
+				if (!isXp(p.getOffhandItem())) {
 					int idx = findSlot(p, TunnelMiner::isXp);
 					if (idx >= 0) {
 						swapOffhand(mc, p, idx);
@@ -497,23 +494,23 @@ public final class TunnelMiner implements ClientModInitializer {
 			}
 			case 1 -> {
 				// nhìn xuống chân rồi ném bình bằng tay trái
-				p.setPitch(90.0f);
+				p.setXRot(90.0f);
 				repTimer++;
-				if (!isXp(p.getOffHandStack())) {
+				if (!isXp(p.getOffhandItem())) {
 					repStage = 2;
 					repTimer = 0;
 					return;
 				}
 				if (repTimer % 2 == 0) {
-					mc.interactionManager.interactItem(p, Hand.OFF_HAND);
+					mc.gameMode.useItem(p, InteractionHand.OFF_HAND);
 				}
-				if (held.getDamage() <= held.getMaxDamage() / 10) {
+				if (held.getDamageValue() <= held.getMaxDamage() / 10) {
 					repStage = 2;
 					repTimer = 0;
 				}
 			}
 			case 2 -> {
-				p.setPitch(90.0f);
+				p.setXRot(90.0f);
 				if (++repTimer < 25) return; // chờ nhặt hết orb XP
 				if (repSwapIdx >= 0) {
 					swapOffhand(mc, p, repSwapIdx);
@@ -534,7 +531,7 @@ public final class TunnelMiner implements ClientModInitializer {
 	}
 
 	private static int remaining(ItemStack s) {
-		return s.getMaxDamage() - s.getDamage();
+		return s.getMaxDamage() - s.getDamageValue();
 	}
 
 	private static int lowThreshold(ItemStack s) {
@@ -576,30 +573,30 @@ public final class TunnelMiner implements ClientModInitializer {
 	/** Slot shop khớp nếu đúng loại item HOẶC tên chứa từ khoá (và không chứa từ khoá loại trừ). */
 	private static boolean shopMatches(ItemStack st, Item type, String[] names, String[] exclude) {
 		if (st.isEmpty()) return false;
-		String name = norm(st.getName().getString());
+		String name = norm(st.getHoverName().getString());
 		if (exclude != null) {
 			for (String x : exclude) if (name.contains(x)) return false;
 		}
 		if (names != null) {
 			for (String k : names) if (name.contains(k)) return true;
 		}
-		return st.isOf(type);
+		return st.is(type);
 	}
 
-	private static void tickShop(MinecraftClient mc, ClientPlayerEntity p) {
-		mc.options.forwardKey.setPressed(false);
-		mc.options.jumpKey.setPressed(false);
+	private static void tickShop(Minecraft mc, LocalPlayer p) {
+		mc.options.keyUp.setDown(false);
+		mc.options.keyJump.setDown(false);
 		shopTimer++;
 
 		switch (shopStage) {
 			case 0 -> {
-				if (mc.currentScreen != null) mc.setScreen(null);
-				p.networkHandler.sendChatCommand("shop");
+				if (mc.screen != null) mc.setScreen(null);
+				p.connection.sendCommand("shop");
 				shopStage = 1;
 				shopTimer = 0;
 			}
 			case 1 -> {
-				if (mc.currentScreen instanceof HandledScreen<?> && !(mc.currentScreen instanceof InventoryScreen)) {
+				if (mc.screen instanceof AbstractContainerScreen<?> && !(mc.screen instanceof InventoryScreen)) {
 					shopStage = 2;
 					shopTimer = 0;
 				} else if (shopTimer > 80) {
@@ -608,26 +605,26 @@ public final class TunnelMiner implements ClientModInitializer {
 			}
 			case 2 -> {
 				if (shopTimer < 6) return; // chờ server gửi nội dung GUI
-				if (!(mc.currentScreen instanceof HandledScreen<?> hs)) {
+				if (!(mc.screen instanceof AbstractContainerScreen<?> hs)) {
 					shopStage = 3;
 					shopTimer = 0;
 					return;
 				}
-				ScreenHandler h = hs.getScreenHandler();
+				AbstractContainerMenu h = hs.getMenu();
 				Slot target = null;
 				for (Slot s : h.slots) {
-					if (s.inventory instanceof PlayerInventory) continue;
-					if (shopMatches(s.getStack(), shopItem, shopNames, shopExclude)) { target = s; break; }
+					if (s.container instanceof Inventory) continue;
+					if (shopMatches(s.getItem(), shopItem, shopNames, shopExclude)) { target = s; break; }
 				}
 				if (target == null && shopCategory != null && !shopCategoryClicked) {
 					// chưa thấy item -> bấm biểu tượng danh mục (nếu có nhiều thì lấy cái ở giữa)
 					List<Slot> icons = new ArrayList<>();
 					List<Slot> nonEmpty = new ArrayList<>();
 					for (Slot s : h.slots) {
-						if (s.inventory instanceof PlayerInventory) continue;
-						if (s.getStack().isEmpty()) continue;
+						if (s.container instanceof Inventory) continue;
+						if (s.getItem().isEmpty()) continue;
 						nonEmpty.add(s);
-						if (shopMatches(s.getStack(), shopCategory, shopCatNames, null)) icons.add(s);
+						if (shopMatches(s.getItem(), shopCategory, shopCatNames, null)) icons.add(s);
 					}
 					if (icons.isEmpty()) {
 						// không khớp theo tên/loại -> lấy ô có đồ nằm ở giữa menu
@@ -638,14 +635,14 @@ public final class TunnelMiner implements ClientModInitializer {
 						icons = nonEmpty;
 					}
 					Slot icon = icons.get(icons.size() / 2);
-					mc.interactionManager.clickSlot(h.syncId, icon.id, 0, SlotActionType.PICKUP, p);
+					mc.gameMode.handleInventoryMouseClick(h.containerId, icon.index, 0, ClickType.PICKUP, p);
 					shopCategoryClicked = true;
 					shopTimer = 0; // chờ GUI danh mục load
 					return;
 				}
 				if (target == null) {
 					if (shopClicks == 0) {
-						stop(mc, "Dừng: không thấy " + shopItem.getName().getString()
+						stop(mc, "Dừng: không thấy " + shopItem.getDefaultInstance().getHoverName().getString()
 							+ " ngay trong /shop (có thể nằm trong danh mục con).");
 					} else {
 						shopStage = 3;
@@ -655,7 +652,7 @@ public final class TunnelMiner implements ClientModInitializer {
 				}
 				if (shopTimer < 4) return;
 				shopTimer = 0;
-				mc.interactionManager.clickSlot(h.syncId, target.id, 0, SlotActionType.PICKUP, p);
+				mc.gameMode.handleInventoryMouseClick(h.containerId, target.index, 0, ClickType.PICKUP, p);
 				if (++shopClicks >= shopCount) {
 					shopStage = 3;
 					shopTimer = 0;
@@ -663,15 +660,15 @@ public final class TunnelMiner implements ClientModInitializer {
 			}
 			case 3 -> {
 				if (shopTimer < 5) return;
-				p.closeHandledScreen();
+				p.closeContainer();
 				shopStage = 4;
 				shopTimer = 0;
 			}
 			case 4 -> {
 				if (shopTimer < 4) return;
 				final Item want = shopItem;
-				if (countItem(p, s -> s.isOf(want)) == 0) {
-					stop(mc, "Dừng: mua " + want.getName().getString() + " không được (hết tiền?).");
+				if (countItem(p, s -> s.is(want)) == 0) {
+					stop(mc, "Dừng: mua " + want.getDefaultInstance().getHoverName().getString() + " không được (hết tiền?).");
 					return;
 				}
 				task = afterShop;
@@ -687,33 +684,33 @@ public final class TunnelMiner implements ClientModInitializer {
 	// =====================================================================================
 
 	/** Tìm slot (index inventory 0..35) chứa item thoả điều kiện, -1 nếu không có. */
-	private static int findSlot(ClientPlayerEntity p, Predicate<ItemStack> pred) {
-		PlayerInventory inv = p.getInventory();
+	private static int findSlot(LocalPlayer p, Predicate<ItemStack> pred) {
+		Inventory inv = p.getInventory();
 		for (int i = 0; i < 36; i++) {
-			if (pred.test(inv.getStack(i))) return i;
+			if (pred.test(inv.getItem(i))) return i;
 		}
 		return -1;
 	}
 
-	private static int countItem(ClientPlayerEntity p, Predicate<ItemStack> pred) {
+	private static int countItem(LocalPlayer p, Predicate<ItemStack> pred) {
 		int n = 0;
-		PlayerInventory inv = p.getInventory();
+		Inventory inv = p.getInventory();
 		for (int i = 0; i < 36; i++) {
-			ItemStack s = inv.getStack(i);
+			ItemStack s = inv.getItem(i);
 			if (pred.test(s)) n += s.getCount();
 		}
-		ItemStack off = p.getOffHandStack();
+		ItemStack off = p.getOffhandItem();
 		if (pred.test(off)) n += off.getCount();
 		return n;
 	}
 
 	/** Hoán đổi slot inventory (index 0..35) với tay trái. */
-	private static void swapOffhand(MinecraftClient mc, ClientPlayerEntity p, int invIdx) {
+	private static void swapOffhand(Minecraft mc, LocalPlayer p, int invIdx) {
 		int slotId = invIdx < 9 ? 36 + invIdx : invIdx; // hotbar = 36..44, túi đồ = 9..35
-		mc.interactionManager.clickSlot(p.playerScreenHandler.syncId, slotId, 40, SlotActionType.SWAP, p);
+		mc.gameMode.handleInventoryMouseClick(p.inventoryMenu.containerId, slotId, 40, ClickType.SWAP, p);
 	}
 
-	private static void msg(MinecraftClient mc, String s) {
-		if (mc.player != null) mc.player.sendMessage(Text.literal("[Tunnel] " + s), true);
+	private static void msg(Minecraft mc, String s) {
+		if (mc.player != null) mc.player.displayClientMessage(Component.literal("[Tunnel] " + s), true);
 	}
 }
