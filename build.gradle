@@ -29,10 +29,8 @@ dependencies {
     modImplementation 'net.fabricmc:fabric-loader:0.18.1'
     modImplementation 'net.fabricmc.fabric-api:fabric-api:0.141.1+1.21.11'
 
-    // Biên dịch BaritoneBridge
+    // Biên dịch BaritoneBridge (chỉ cần để compile, không đóng gói vào jar)
     modCompileOnly files(baritoneJar)
-    // Đóng gói Baritone lồng trong jar (Loom ghi vào fabric.mod.json)
-    include files(baritoneJar)
     // Chạy thử runClient
     modLocalRuntime files(baritoneJar)
 }
