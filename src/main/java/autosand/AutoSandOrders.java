@@ -3866,22 +3866,22 @@ public class AutoSandOrders implements ClientModInitializer {
     }
 
     static class AutoSandScreen extends Screen {
-        int PW = 560, SIDE = 136;
-        static final String[] TABS = {"Tổng quan", "Đào cát", "Sinh tồn", "An toàn", "Tự động", "Thống kê", "Nâng cao"};
-        static final int[] TAB_COL = {0xFF7CD4FF, 0xFFF6C85F, 0xFF6EE79A, 0xFFFF6B81, 0xFF2DD4BF, 0xFFF472B6, 0xFFB35CFF, 0xFFFFA94D};
-        static final int TXT = 0xFFF1F7FF, MUTED = 0xFF91A9D0;
-        // Bảng màu theo trang web lấy key (SNAD PREMIUM): nền xanh đen, thẻ viền tím xanh, nút xanh lá 3D, thẻ sự kiện vàng
-        static final int PANEL = 0xFF061326, PANEL_EDGE = 0xFF13BDF4;
-        static final int CARD = 0xFF071D35, CARD_EDGE = 0xFF14558A, CARD_HOV = 0xFF0B2B49;
-        static final int GOLD_BG = 0xFF102B43, GOLD_EDGE = 0xFF1CBDEB, GOLD_TXT = 0xFF9BEAFF;
-        static final int GREEN_TOP = 0xFF69F4E5, GREEN_BOT = 0xFF00BFAF, GREEN_EDGE = 0xFF087F8C, GREEN_TXT = 0xFF032B36;
-        static final int RED_TOP = 0xFFFF9AA8, RED_BOT = 0xFFF0566F, RED_EDGE = 0xFFA83047, RED_TXT = 0xFF3A0A14;
-        static final int PILL_OFF = 0xFF344B68;
+        static final int PW = 620, SIDE = 142;
+        static final String[] TABS = {"Chính", "Đào cát", "Sinh tồn", "An toàn", "Tự đào", "Thống kê", "Nâng cao"};
+        static final int[] TAB_COL = {0xFF7CD4FF, 0xFFF6C85F, 0xFF6EE79A, 0xFFFF6B81, 0xFF2DD4BF, 0xFFF472B6, 0xFFA78BFA, 0xFFFFA94D};
+        static final int TXT = 0xFFFFFFFF, MUTED = 0xFF8E94BC;
+        // Bảng màu AutoSand Premium: nền xanh đen trong suốt, viền cyan/tím neon, nút cyan phát sáng
+        static final int PANEL = 0xF2081020, PANEL_EDGE = 0xFF19CFFF;
+        static final int CARD = 0xF20A1B31, CARD_EDGE = 0xFF1767B5, CARD_HOV = 0xFF10395A;
+        static final int GOLD_BG = 0xFF0C2941, GOLD_EDGE = 0xFF18BDEB, GOLD_TXT = 0xFFB6F6FF;
+        static final int GREEN_TOP = 0xFF19F0D0, GREEN_BOT = 0xFF087E9D, GREEN_EDGE = 0xFF27F2FF, GREEN_TXT = 0xFFECFFFF;
+        static final int RED_TOP = 0xFFFF477E, RED_BOT = 0xFF8C174F, RED_EDGE = 0xFFFF4F9A, RED_TXT = 0xFFFFFFFF;
+        static final int PILL_OFF = 0xFF425875;
         static final int[] PARTICLE = {0xAA4B5275, 0xAA3A3F5C, 0xAA2F8C99, 0xAA5A6285};
 
         /** Màu chuyển xanh lá -> xanh dương nhạt -> tím (giống chữ SNAD PREMIUM). */
         static int grad3(float t) {
-            return t < 0.5f ? lerpC(0xFF86F0A8, 0xFF7CD4FF, t * 2f) : lerpC(0xFF7CD4FF, 0xFFB35CFF, (t - 0.5f) * 2f);
+            return t < 0.5f ? lerpC(0xFFB34DFF, 0xFF16D9FF, t * 2f) : lerpC(0xFF16D9FF, 0xFF287BFF, (t - 0.5f) * 2f);
         }
 
         static void card(GuiGraphics g, int x, int y, int w, int h, int r, int bg, int edge) {
@@ -3919,19 +3919,22 @@ public class AutoSandOrders implements ClientModInitializer {
             }
         }
 
-        /** Lớp phủ tối trong suốt để vẫn nhìn thấy thế giới Minecraft phía sau menu. */
+        /** Nền toàn màn hình: xanh đen + hạt vuông pixel trôi nhẹ + mặt đất pixel (như trang web). */
         void backdrop(GuiGraphics g) {
-            g.fill(0, 0, this.width, this.height, 0x55040B19);
+            g.fillGradient(0, 0, this.width, this.height, 0x72040B18, 0x8A06142A);
             long tm = System.currentTimeMillis();
-            for (int i = 0; i < 28; i++) {
+            g.fill(this.width * 55 / 100, this.height * 28 / 100, this.width * 78 / 100, this.height * 28 / 100 + 9, 0x331E1B4B);   // bóng mây
+            g.fill(this.width * 60 / 100, this.height * 28 / 100 - 7, this.width * 72 / 100, this.height * 28 / 100, 0x261E1B4B);
+            for (int i = 0; i < 38; i++) {
                 int h = (i + 1) * 0x9E3779B1;
                 int rx = Math.floorMod(h >>> 7, Math.max(1, this.width));
                 int ry = Math.floorMod((h * 31) >>> 5, Math.max(1, this.height));
-                int sz = 2 + (i % 3);
-                int bob = (int) Math.round(Math.sin(tm / 1400.0 + i) * 2.0);
-                int col = (i % 2 == 0) ? 0x3340DFFF : 0x33B04DFF;
-                g.fill(rx, ry + bob, rx + sz, ry + bob + sz, col);
+                int sz = 2 + (i % 3) * 2;
+                int bob = (int) Math.round(Math.sin(tm / 1400.0 + i) * 3.0);
+                g.fill(rx, ry + bob, rx + sz, ry + bob + sz, PARTICLE[i % PARTICLE.length]);
             }
+            // Keep the game world visible behind the translucent menu; no opaque pixel-ground overlay.
+
         }
 
         /** Một điều khiển tự vẽ (nút thật của game nằm bên dưới, trong suốt, chỉ để nhận chuột). */
@@ -3982,15 +3985,13 @@ public class AutoSandOrders implements ClientModInitializer {
         @Override
         protected void init() {
             ctls.clear();
-            PW = Math.min(560, Math.max(260, this.width - 16));
-            SIDE = Math.min(136, PW / 3);
-            ph = Math.min(this.height - 8, 380);
-            x0 = this.width / 2 - PW / 2;
+            ph = Math.min(this.height - 20, 420);
+            x0 = Math.max(8, (this.width - PW) / 2);
             y0 = this.height / 2 - ph / 2;
             cx = x0 + SIDE + 10;
             cw = PW - SIDE - 20;
-            cy = y0 + 44;
-            availH = ph - 44 - 10;
+            cy = y0 + 54;
+            availH = ph - 64 - 10;
 
             wasValid = License.valid();
             if (!wasValid) {                                   // chưa có key hợp lệ: ẩn mọi chức năng, chỉ cho nhập key
@@ -4016,14 +4017,14 @@ public class AutoSandOrders implements ClientModInitializer {
 
             for (int i = 0; i < TABS.length; i++) {
                 final int t = i;
-                Ctl c = add(4, x0 + 8, y0 + 44 + i * 24, SIDE - 14, 21, TABS[i], null, () -> { tab = t; rebuildWidgets(); });
+                Ctl c = add(4, x0 + 8, y0 + 48 + i * 30, SIDE - 14, 26, TABS[i], null, () -> { tab = t; rebuildWidgets(); });
                 c.selected = (i == tab);
                 c.color = TAB_COL[i];
             }
             add(5, x0 + PW - 26, y0 + 9, 16, 16, "x", null, () -> onClose());
 
             switch (tab) {
-                case 0 -> add(3, cx, cy, cw, 36, "", null, () -> setEnabled(Minecraft.getInstance(), !enabled));
+                case 0 -> add(3, cx, cy, cw, 46, "", null, () -> setEnabled(Minecraft.getInstance(), !enabled));
                 case 1 -> {
                     begin(7);
                     cycle(0, "Chế độ đào", "Tự đào (có sẵn), giữ phím hoặc chỉ Nuker", () -> mode.label, () -> {
@@ -4157,7 +4158,7 @@ public class AutoSandOrders implements ClientModInitializer {
 
             // ----- viền sáng + khung bảng -----
             for (int i = 8; i >= 1; i--) {
-                rrect(g, x0 - i, y0 - i, PW + 2 * i, ph + 2 * i, 14 + i, ((0x12 - i) << 24) | 0x20D9FF);
+                rrect(g, x0 - i, y0 - i, PW + 2 * i, ph + 2 * i, 14 + i, ((0x12 - i) << 24) | 0x7C6CFF);
             }
             rrect(g, x0, y0, PW, ph, 14, PANEL_EDGE);
             rrect(g, x0 + 1, y0 + 1, PW - 2, ph - 2, 13, PANEL);
@@ -4165,7 +4166,7 @@ public class AutoSandOrders implements ClientModInitializer {
             for (int i = 0; i < 48; i++) {                                                         // vạch xanh lá -> xanh dương -> tím
                 g.fill(x0 + 10 + i * (PW - 20) / 48, y0 + 35, x0 + 10 + (i + 1) * (PW - 20) / 48, y0 + 37, grad3(i / 47f));
             }
-            if (wasValid) g.fill(x0 + SIDE, y0 + 46, x0 + SIDE + 1, y0 + ph - 10, 0xFF17476A);      // đường kẻ dọc
+            if (wasValid) g.fill(x0 + SIDE, y0 + 46, x0 + SIDE + 1, y0 + ph - 10, 0xFF1674A8);      // đường kẻ dọc
 
             // ----- biểu tượng mầm cây (ô xanh lá bo góc) -----
             int icx = x0 + 12, icy = y0 + 7;
@@ -4179,7 +4180,7 @@ public class AutoSandOrders implements ClientModInitializer {
 
             // ----- tiêu đề chữ chuyển màu + dòng phụ cách chữ -----
             gradText(g, "AUTOSAND", x0 + 42, y0 + 9, 2);
-            String sub = (wasValid ? mode.label.toUpperCase(Locale.ROOT) + "  ·  " : "") + "PREMIUM";
+            String sub = (wasValid ? mode.label.toUpperCase(Locale.ROOT) + "  ·  " : "") + "KINGSMP";
             spaced(g, sub, x0 + 42, y0 + 22, 1, MUTED);
 
             boolean runOn = enabled && wasValid;
@@ -4202,20 +4203,20 @@ public class AutoSandOrders implements ClientModInitializer {
                 g.drawString(this.font, t2, x0 + (PW - this.font.width(t2)) / 2, y0 + ph / 2 - 26, MUTED, false);
                 spaced(g, "KEY", x0 + 24, y0 + ph / 2 - 16, 1, MUTED);
             } else if (tab == 0) {
-                card(g, cx, cy + 42, cw, 24, 10, GOLD_BG, GOLD_EDGE);
-                rrect(g, cx + 10, cy + 51, 6, 6, 3, enabled ? 0xFF6EE79A : 0xFFF6C85F);
-                g.drawString(this.font, stateText(), cx + 23, cy + 50, GOLD_TXT, false);
+                card(g, cx, cy + 52, cw, 28, 10, GOLD_BG, GOLD_EDGE);
+                rrect(g, cx + 10, cy + 63, 7, 7, 3, enabled ? 0xFF19F0D0 : 0xFFFF477E);
+                g.drawString(this.font, stateText(), cx + 24, cy + 61, GOLD_TXT, false);
 
                 int sw = (cw - 8) / 3;
                 if (p != null) {
                     int sp = shovelPct(p), food = p.getFoodData().getFoodLevel();
                     int spCol = sp > 50 ? 0xFF22C55E : sp > 20 ? 0xFFF59E0B : 0xFFEF4444;
-                    stat(g, cx, cy + 72, sw, 36, "Cát", String.valueOf(countItem(p, Items.SAND)), TXT, -1f, 0);
-                    stat(g, cx + sw + 4, cy + 72, sw, 36, "Bình XP", String.valueOf(countItem(p, Items.EXPERIENCE_BOTTLE)), TXT, -1f, 0);
-                    stat(g, cx + 2 * (sw + 4), cy + 72, sw, 36, "Đồ ăn", String.valueOf(countFood(p)), TXT, -1f, 0);
-                    stat(g, cx, cy + 112, sw, 36, "Xẻng", sp < 0 ? "không có" : sp + "%", TXT, sp < 0 ? -1f : sp / 100f, spCol);
-                    stat(g, cx + sw + 4, cy + 112, sw, 36, "Đói", food + "/20", TXT, food / 20f, food <= eatBelow ? 0xFFEF4444 : 0xFFF59E0B);
-                    stat(g, cx + 2 * (sw + 4), cy + 112, sw, 36, "Nhặt cát", pickupLabel(), TXT, -1f, 0);
+                    stat(g, cx, cy + 86, sw, 42, "Cát", String.valueOf(countItem(p, Items.SAND)), TXT, -1f, 0);
+                    stat(g, cx + sw + 4, cy + 86, sw, 42, "Bình XP", String.valueOf(countItem(p, Items.EXPERIENCE_BOTTLE)), TXT, -1f, 0);
+                    stat(g, cx + 2 * (sw + 4), cy + 86, sw, 42, "Đồ ăn", String.valueOf(countFood(p)), TXT, -1f, 0);
+                    stat(g, cx, cy + 132, sw, 42, "Xẻng", sp < 0 ? "không có" : sp + "%", TXT, sp < 0 ? -1f : sp / 100f, spCol);
+                    stat(g, cx + sw + 4, cy + 132, sw, 42, "Đói", food + "/20", TXT, food / 20f, food <= eatBelow ? 0xFFEF4444 : 0xFFF59E0B);
+                    stat(g, cx + 2 * (sw + 4), cy + 132, sw, 42, "Nhặt cát", pickupLabel(), TXT, -1f, 0);
                 } else {
                     g.drawString(this.font, "Chưa vào thế giới.", cx + 4, cy + 80, MUTED, false);
                 }
@@ -4254,7 +4255,7 @@ public class AutoSandOrders implements ClientModInitializer {
             boolean hov = mx >= c.x && mx < c.x + c.w && my >= c.y && my < c.y + c.h;
             switch (c.kind) {
                 case 0, 1 -> {
-                    card(g, c.x, c.y, c.w, c.h, 7, hov ? CARD_HOV : CARD, hov ? 0xFF20D9FF : CARD_EDGE);
+                    card(g, c.x, c.y, c.w, c.h, 7, hov ? CARD_HOV : CARD, hov ? 0xFF6D7BFF : CARD_EDGE);
                     g.fillGradient(c.x + 4, c.y + 1, c.x + c.w - 4, c.y + 1 + c.h / 2, 0x0EFFFFFF, 0x00FFFFFF);
                     boolean showDesc = c.desc != null && c.h >= 26;
                     int ty = showDesc ? c.y + 4 : c.y + (c.h - 8) / 2;
@@ -4265,10 +4266,10 @@ public class AutoSandOrders implements ClientModInitializer {
                         c.t += Math.max(-0.2f, Math.min(0.2f, target - c.t));
                         rrect(g, c.x + 2, c.y + 5, 3, c.h - 10, 1, on ? 0xFF6EE79A : PILL_OFF);
                         int sx = c.x + c.w - 40, sy = c.y + (c.h - 14) / 2;
-                        rrect(g, sx, sy, 30, 14, 7, lerpC(PILL_OFF, 0xFF00D6C5, c.t));
+                        rrect(g, sx, sy, 30, 14, 7, lerpC(PILL_OFF, 0xFF6EE79A, c.t));
                         rrect(g, sx + 2 + (int) (c.t * 16), sy + 2, 10, 10, 5, 0xFFFFFFFF);
                     } else {
-                        rrect(g, c.x + 2, c.y + 5, 3, c.h - 10, 1, 0xFFB35CFF);
+                        rrect(g, c.x + 2, c.y + 5, 3, c.h - 10, 1, 0xFFA78BFA);
                         String v = c.value == null ? "" : c.value.get();
                         int chipW = this.font.width(v) + 18, chipX = c.x + c.w - chipW - 8, chipY = c.y + (c.h - 16) / 2;
                         rrect(g, chipX, chipY, chipW, 16, 8, hov ? 0xFF8A7BFF : 0xFF5B4BDB);
@@ -4287,7 +4288,7 @@ public class AutoSandOrders implements ClientModInitializer {
                     float target = enabled ? 1f : 0f;
                     if (c.t < 0f) c.t = target;
                     c.t += Math.max(-0.12f, Math.min(0.12f, target - c.t));
-                    int glow = enabled ? 0xF0566F : 0x20D9FF;
+                    int glow = enabled ? 0xF0566F : 0x6EE79A;
                     for (int i = 5; i >= 1; i--) rrect(g, c.x - i, c.y - i, c.w + 2 * i, c.h + 2 * i, 9 + i, ((0x16 - i * 3) << 24) | glow);
                     if (enabled) button3d(g, c.x, c.y, c.w, c.h, RED_TOP, RED_BOT, RED_EDGE, hov);
                     else button3d(g, c.x, c.y, c.w, c.h, GREEN_TOP, GREEN_BOT, GREEN_EDGE, hov);
@@ -4300,7 +4301,7 @@ public class AutoSandOrders implements ClientModInitializer {
                         rrect(g, c.x + 1, c.y + 1, c.w - 2, c.h - 2, 6, lerpC(PANEL, c.color, 0.24f));
                         rrect(g, c.x + 2, c.y + 5, 3, c.h - 10, 1, c.color);
                     } else if (hov) {
-                        rrect(g, c.x, c.y, c.w, c.h, 7, 0xFF0A2944);
+                        rrect(g, c.x, c.y, c.w, c.h, 7, 0xFF181D4A);
                     }
                     rrect(g, c.x + 10, c.y + (c.h - 6) / 2, 6, 6, 3, c.color);
                     g.drawString(this.font, c.title, c.x + 22, c.y + (c.h - 8) / 2, c.selected ? TXT : (hov ? 0xFFD8DCF5 : MUTED), false);
