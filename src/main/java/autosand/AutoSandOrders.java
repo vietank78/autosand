@@ -262,6 +262,7 @@ public class AutoSandOrders implements ClientModInitializer {
     static final int REJOIN_WAIT = 200;
     static int rejoinWait = 0;
     static boolean buyFood = false, foodWarn = false;            // đang mua đồ ăn (thay vì bình XP)
+    static boolean hpEating = false;                            // đang ăn / mua cà rốt vàng để hồi máu trước khi ném ngọc Ender
     static int foodBuyFails = 0, junkCool = 0, junkStep = 0, junkDropped = 0, eatPrevSlot = -1;
     static int eatIdle = 0, eatLastFood = 0;
     static int eatTries = 0, eatOffFrom = -1;
@@ -1004,6 +1005,8 @@ public class AutoSandOrders implements ClientModInitializer {
             AutoMiner.tunnelWidth = pInt(pr, "tunnelWidth", 3);
             AutoMiner.tunnelBelow = pInt(pr, "tunnelBelow", 0);
             AutoMiner.shaft = false;
+            AutoMiner.descendDepth = pInt(pr, "descendDepth", 2);
+            AutoMiner.nukerHold = pBool(pr, "nukerHold", true);
             autoRejoin = pBool(pr, "autoRejoin", true);
             usePearl = pBool(pr, "usePearl", true);
             autoTotem = pBool(pr, "autoTotem", true);
@@ -1068,6 +1071,7 @@ public class AutoSandOrders implements ClientModInitializer {
         if (AutoMiner.tunnelWidth % 2 == 0) AutoMiner.tunnelWidth++;          // độ rộng phải lẻ để có trục giữa
         AutoMiner.tunnelBelow = clampI(AutoMiner.tunnelBelow, 0, Math.min(7, AutoMiner.tunnelLayers - 1));
         AutoMiner.tunnelInit = false;
+        AutoMiner.descendDepth = clampI(AutoMiner.descendDepth, 0, 8);
         pricePerSand = clampD(pricePerSand);
         minSandPrice = clampD(minSandPrice);
         maxXpUnitPrice = clampD(maxXpUnitPrice);
@@ -1098,7 +1102,9 @@ public class AutoSandOrders implements ClientModInitializer {
                 case "maxTotemSpend" -> maxTotemSpend = Double.parseDouble(v);
                 case "autoDefend" -> autoDefend = Boolean.parseBoolean(v);
                 case "lowLoad" -> lowLoad = Boolean.parseBoolean(v);
-                default -> { return "Không có mục \"" + name + "\". Xem danh sách trong /autosand set (mendPct, mendUntil, eatBelow, eatUntil, pickup, defenseRadius, fgFps, bgFps, lowLoadView, minSandPrice, maxXpUnitPrice, maxXpSpend, maxTotemUnitPrice, maxTotemSpend, autoDefend, lowLoad)."; }
+                case "descendDepth" -> AutoMiner.descendDepth = clampI(Integer.parseInt(v), 0, 8);
+                case "nukerHold" -> AutoMiner.nukerHold = Boolean.parseBoolean(v);
+                default -> { return "Không có mục \"" + name + "\". Xem danh sách trong /autosand set (mendPct, mendUntil, eatBelow, eatUntil, pickup, defenseRadius, fgFps, bgFps, lowLoadView, minSandPrice, maxXpUnitPrice, maxXpSpend, maxTotemUnitPrice, maxTotemSpend, autoDefend, lowLoad, descendDepth, nukerHold)."; }
             }
         } catch (NumberFormatException e) {
             return "Giá trị không hợp lệ: " + v;
@@ -1134,6 +1140,8 @@ public class AutoSandOrders implements ClientModInitializer {
             pr.setProperty("autoRespawn", String.valueOf(AutoMiner.autoRespawn));
             pr.setProperty("digThrough", String.valueOf(AutoMiner.digThrough));
             pr.setProperty("scanRadius", String.valueOf(AutoMiner.scanRadius));
+            pr.setProperty("descendDepth", String.valueOf(AutoMiner.descendDepth));
+            pr.setProperty("nukerHold", String.valueOf(AutoMiner.nukerHold));
             pr.setProperty("autoRejoin", String.valueOf(autoRejoin));
             pr.setProperty("usePearl", String.valueOf(usePearl));
             pr.setProperty("autoTotem", String.valueOf(autoTotem));
@@ -1392,7 +1400,8 @@ public class AutoSandOrders implements ClientModInitializer {
                     }
                 }
                 if (pick < 0) {
-                    if (++ordersWait < 10) return;   // chờ server điền nốt các ô đơn hàng
+                    if (++ordersWait < 30) return;   // chờ server điền nốt các ô đơn hàng (1,5 giây)
+                    msg(p, "Bảng /orders không có đơn cát nào dùng được. Các ô: " + dump(h));   // để biết bot đang thấy gì khi lỗi
                     abort(mc, "không còn đơn cát nào để thử (đã thử " + orderTry + " đơn)");
                     return;
                 }
@@ -1778,7 +1787,7 @@ public class AutoSandOrders implements ClientModInitializer {
             // ================= ĂN KHI ĐÓI =================
             case EAT_PREP -> {
                 if (screenBlocks(mc)) { p.closeContainer(); wait = 2; return; }
-                if (p.getFoodData().getFoodLevel() >= eatUntil) { finishEat(mc, p, COOLDOWN_AFTER); return; }
+                if (p.getFoodData().getFoodLevel() >= eatGoal()) { finishEat(mc, p, COOLDOWN_AFTER); return; }
                 int idx = findFood(p);
                 if (idx < 0) { msg(p, "Không có đồ ăn."); finishEat(mc, p, 600); return; }
                 eatPrevSlot = getSelected(p);
@@ -1800,7 +1809,7 @@ public class AutoSandOrders implements ClientModInitializer {
             case EAT_USE -> {
                 if (screenBlocks(mc)) { p.closeContainer(); wait = 2; return; }
                 boolean using = p.isUsingItem();
-                if (!using && p.getFoodData().getFoodLevel() >= eatUntil) {
+                if (!using && p.getFoodData().getFoodLevel() >= eatGoal()) {
                     finishEat(mc, p, COOLDOWN_AFTER);
                     return;
                 }
@@ -1919,7 +1928,35 @@ public class AutoSandOrders implements ClientModInitializer {
         wait = ACTION_DELAY;
     }
 
+    /** Mức đói cần ăn tới: bình thường theo eatUntil; ăn để hồi máu (trước khi ném ngọc) thì ăn tới đầy 20/20. */
+    static int eatGoal() { return hpEating ? 20 : eatUntil; }
+
+    /**
+     * Máu thấp trước khi ném ngọc Ender (ngọc gây 5 sát thương): ăn cho đầy thanh đói để hồi máu nhanh.
+     * Có đồ ăn -> ăn (ưu tiên cà rốt vàng); hết đồ ăn -> /shop mua cà rốt vàng rồi ăn.
+     * Trả về true = vừa chuyển sang trạng thái ăn / mua (AutoMiner đứng chờ); false = không cần / không ăn được
+     * (đã no, tắt tự ăn, hết chỗ trống để mua) -> cứ chờ hồi máu tự nhiên.
+     */
+    static boolean healBeforePearl(Minecraft mc, LocalPlayer p) {
+        if (!autoEat || state != S.MINING || screenBlocks(mc)) return false;
+        if (p.getFoodData().getFoodLevel() >= 20) return false;
+        if (findFood(p) >= 0) {
+            hpEating = true;
+            msg(p, "Máu thấp (" + (int) p.getHealth() + ") -> ăn cho đầy thanh đói để hồi máu.");
+            startEat(mc, p);
+            return true;
+        }
+        if (autoBuyFood && emptySlot(p) >= 0) {
+            hpEating = true;
+            msg(p, "Máu thấp, hết đồ ăn -> mua cà rốt vàng rồi ăn để hồi máu.");
+            startFoodBuy(mc, p);
+            return true;
+        }
+        return false;
+    }
+
     static void finishEat(Minecraft mc, LocalPlayer p, int cool) {
+        hpEating = false;
         restoreLook(mc, p);
         state = S.MINING;
         cooldown = cool;
@@ -2083,6 +2120,7 @@ public class AutoSandOrders implements ClientModInitializer {
 
     static void abort(Minecraft mc, String why) {
         LocalPlayer p = mc.player;
+        hpEating = false;
         if (p != null) {
             if (screenBlocks(mc)) p.closeContainer();
             if (shovelSwapped && mc.gameMode != null) {
@@ -3142,8 +3180,9 @@ public class AutoSandOrders implements ClientModInitializer {
         //    - hố rộng / hang kín: đứng yên không đào, không đi được ~3 giây mà vùng đi bộ được bị khép kín -> thoát
         if (escCool > 0) escCool--;
         boolean shaftDigging = AutoMiner.shaft && !AutoMiner.shaftBlocked;   // đang đào giếng xuống được -> không can thiệp
-        boolean tight = avoidHole && !shaftDigging && p.onGround() && trapped(lv, p.blockPosition());
-        boolean pocket = avoidHole && !shaftDigging && !tight && p.onGround() && escCool <= 0 && pocketStuck(mc, p, lv);
+        boolean nukerWait = AutoMiner.holdingForNuker(lv);                   // đang đứng trong hố đợi Nuker dọn cát -> không phải kẹt
+        boolean tight = avoidHole && !shaftDigging && !nukerWait && p.onGround() && trapped(lv, p.blockPosition());
+        boolean pocket = avoidHole && !shaftDigging && !nukerWait && !tight && p.onGround() && escCool <= 0 && pocketStuck(mc, p, lv);
         if ((tight || pocket) && escCool <= 0) {
             if (pocket || ++trapTicks >= TRAP_TICKS) {
                 trapTicks = 0;
@@ -3827,22 +3866,22 @@ public class AutoSandOrders implements ClientModInitializer {
     }
 
     static class AutoSandScreen extends Screen {
-        static final int PW = 392, SIDE = 94;
-        static final String[] TABS = {"Chính", "Đào cát", "Sinh tồn", "An toàn", "Tự đào", "Thống kê", "Nâng cao"};
-        static final int[] TAB_COL = {0xFF7CD4FF, 0xFFF6C85F, 0xFF6EE79A, 0xFFFF6B81, 0xFF2DD4BF, 0xFFF472B6, 0xFFA78BFA, 0xFFFFA94D};
-        static final int TXT = 0xFFFFFFFF, MUTED = 0xFF8E94BC;
+        int PW = 560, SIDE = 136;
+        static final String[] TABS = {"Tổng quan", "Đào cát", "Sinh tồn", "An toàn", "Tự động", "Thống kê", "Nâng cao"};
+        static final int[] TAB_COL = {0xFF7CD4FF, 0xFFF6C85F, 0xFF6EE79A, 0xFFFF6B81, 0xFF2DD4BF, 0xFFF472B6, 0xFFB35CFF, 0xFFFFA94D};
+        static final int TXT = 0xFFF1F7FF, MUTED = 0xFF91A9D0;
         // Bảng màu theo trang web lấy key (SNAD PREMIUM): nền xanh đen, thẻ viền tím xanh, nút xanh lá 3D, thẻ sự kiện vàng
-        static final int PANEL = 0xFF0D1130, PANEL_EDGE = 0xFF283163;
-        static final int CARD = 0xFF141839, CARD_EDGE = 0xFF2B3566, CARD_HOV = 0xFF1A2050;
-        static final int GOLD_BG = 0xFF2B2230, GOLD_EDGE = 0xFF9A7A42, GOLD_TXT = 0xFFFCE3A0;
-        static final int GREEN_TOP = 0xFF9BF7A4, GREEN_BOT = 0xFF5FC87A, GREEN_EDGE = 0xFF37814D, GREEN_TXT = 0xFF0B2A18;
+        static final int PANEL = 0xFF061326, PANEL_EDGE = 0xFF13BDF4;
+        static final int CARD = 0xFF071D35, CARD_EDGE = 0xFF14558A, CARD_HOV = 0xFF0B2B49;
+        static final int GOLD_BG = 0xFF102B43, GOLD_EDGE = 0xFF1CBDEB, GOLD_TXT = 0xFF9BEAFF;
+        static final int GREEN_TOP = 0xFF69F4E5, GREEN_BOT = 0xFF00BFAF, GREEN_EDGE = 0xFF087F8C, GREEN_TXT = 0xFF032B36;
         static final int RED_TOP = 0xFFFF9AA8, RED_BOT = 0xFFF0566F, RED_EDGE = 0xFFA83047, RED_TXT = 0xFF3A0A14;
-        static final int PILL_OFF = 0xFF3A3F66;
+        static final int PILL_OFF = 0xFF344B68;
         static final int[] PARTICLE = {0xAA4B5275, 0xAA3A3F5C, 0xAA2F8C99, 0xAA5A6285};
 
         /** Màu chuyển xanh lá -> xanh dương nhạt -> tím (giống chữ SNAD PREMIUM). */
         static int grad3(float t) {
-            return t < 0.5f ? lerpC(0xFF86F0A8, 0xFF7CD4FF, t * 2f) : lerpC(0xFF7CD4FF, 0xFFA78BFA, (t - 0.5f) * 2f);
+            return t < 0.5f ? lerpC(0xFF86F0A8, 0xFF7CD4FF, t * 2f) : lerpC(0xFF7CD4FF, 0xFFB35CFF, (t - 0.5f) * 2f);
         }
 
         static void card(GuiGraphics g, int x, int y, int w, int h, int r, int bg, int edge) {
@@ -3880,34 +3919,18 @@ public class AutoSandOrders implements ClientModInitializer {
             }
         }
 
-        /** Nền toàn màn hình: xanh đen + hạt vuông pixel trôi nhẹ + mặt đất pixel (như trang web). */
+        /** Lớp phủ tối trong suốt để vẫn nhìn thấy thế giới Minecraft phía sau menu. */
         void backdrop(GuiGraphics g) {
-            g.fillGradient(0, 0, this.width, this.height, 0xF20A0B1F, 0xF216122E);
+            g.fill(0, 0, this.width, this.height, 0x55040B19);
             long tm = System.currentTimeMillis();
-            g.fill(this.width * 55 / 100, this.height * 28 / 100, this.width * 78 / 100, this.height * 28 / 100 + 9, 0x331E1B4B);   // bóng mây
-            g.fill(this.width * 60 / 100, this.height * 28 / 100 - 7, this.width * 72 / 100, this.height * 28 / 100, 0x261E1B4B);
-            for (int i = 0; i < 38; i++) {
+            for (int i = 0; i < 28; i++) {
                 int h = (i + 1) * 0x9E3779B1;
                 int rx = Math.floorMod(h >>> 7, Math.max(1, this.width));
                 int ry = Math.floorMod((h * 31) >>> 5, Math.max(1, this.height));
-                int sz = 2 + (i % 3) * 2;
-                int bob = (int) Math.round(Math.sin(tm / 1400.0 + i) * 3.0);
-                g.fill(rx, ry + bob, rx + sz, ry + bob + sz, PARTICLE[i % PARTICLE.length]);
-            }
-            int gy = this.height - Math.max(26, this.height / 9);
-            for (int by = gy; by < this.height; by += 10) {
-                for (int bx = 0; bx < this.width; bx += 10) {
-                    int h = (bx / 10) * 73856093 ^ (by / 10) * 19349663;
-                    int col;
-                    if (by == gy) col = (h & 1) == 0 ? 0xFF2F7A45 : 0xFF3A9150;                  // cỏ
-                    else if (by == gy + 10) col = (h & 1) == 0 ? 0xFF5A4030 : 0xFF4B3427;        // đất
-                    else {
-                        int k = Math.floorMod(h, 41);
-                        col = k == 0 ? 0xFF8E2A44 : k == 1 ? 0xFF2F8C99 : k == 2 ? 0xFF3F6B4A
-                            : ((h & 3) == 0 ? 0xFF2D3250 : (h & 3) == 1 ? 0xFF252A45 : 0xFF1D2036);
-                    }
-                    g.fill(bx, by, Math.min(bx + 10, this.width), Math.min(by + 10, this.height), col);
-                }
+                int sz = 2 + (i % 3);
+                int bob = (int) Math.round(Math.sin(tm / 1400.0 + i) * 2.0);
+                int col = (i % 2 == 0) ? 0x3340DFFF : 0x33B04DFF;
+                g.fill(rx, ry + bob, rx + sz, ry + bob + sz, col);
             }
         }
 
@@ -3959,7 +3982,9 @@ public class AutoSandOrders implements ClientModInitializer {
         @Override
         protected void init() {
             ctls.clear();
-            ph = Math.min(this.height - 8, 262);
+            PW = Math.min(560, Math.max(260, this.width - 16));
+            SIDE = Math.min(136, PW / 3);
+            ph = Math.min(this.height - 8, 380);
             x0 = this.width / 2 - PW / 2;
             y0 = this.height / 2 - ph / 2;
             cx = x0 + SIDE + 10;
@@ -4132,7 +4157,7 @@ public class AutoSandOrders implements ClientModInitializer {
 
             // ----- viền sáng + khung bảng -----
             for (int i = 8; i >= 1; i--) {
-                rrect(g, x0 - i, y0 - i, PW + 2 * i, ph + 2 * i, 14 + i, ((0x12 - i) << 24) | 0x7C6CFF);
+                rrect(g, x0 - i, y0 - i, PW + 2 * i, ph + 2 * i, 14 + i, ((0x12 - i) << 24) | 0x20D9FF);
             }
             rrect(g, x0, y0, PW, ph, 14, PANEL_EDGE);
             rrect(g, x0 + 1, y0 + 1, PW - 2, ph - 2, 13, PANEL);
@@ -4140,7 +4165,7 @@ public class AutoSandOrders implements ClientModInitializer {
             for (int i = 0; i < 48; i++) {                                                         // vạch xanh lá -> xanh dương -> tím
                 g.fill(x0 + 10 + i * (PW - 20) / 48, y0 + 35, x0 + 10 + (i + 1) * (PW - 20) / 48, y0 + 37, grad3(i / 47f));
             }
-            if (wasValid) g.fill(x0 + SIDE, y0 + 46, x0 + SIDE + 1, y0 + ph - 10, 0xFF262E5A);      // đường kẻ dọc
+            if (wasValid) g.fill(x0 + SIDE, y0 + 46, x0 + SIDE + 1, y0 + ph - 10, 0xFF17476A);      // đường kẻ dọc
 
             // ----- biểu tượng mầm cây (ô xanh lá bo góc) -----
             int icx = x0 + 12, icy = y0 + 7;
@@ -4154,7 +4179,7 @@ public class AutoSandOrders implements ClientModInitializer {
 
             // ----- tiêu đề chữ chuyển màu + dòng phụ cách chữ -----
             gradText(g, "AUTOSAND", x0 + 42, y0 + 9, 2);
-            String sub = (wasValid ? mode.label.toUpperCase(Locale.ROOT) + "  ·  " : "") + "KINGSMP";
+            String sub = (wasValid ? mode.label.toUpperCase(Locale.ROOT) + "  ·  " : "") + "PREMIUM";
             spaced(g, sub, x0 + 42, y0 + 22, 1, MUTED);
 
             boolean runOn = enabled && wasValid;
@@ -4229,7 +4254,7 @@ public class AutoSandOrders implements ClientModInitializer {
             boolean hov = mx >= c.x && mx < c.x + c.w && my >= c.y && my < c.y + c.h;
             switch (c.kind) {
                 case 0, 1 -> {
-                    card(g, c.x, c.y, c.w, c.h, 7, hov ? CARD_HOV : CARD, hov ? 0xFF6D7BFF : CARD_EDGE);
+                    card(g, c.x, c.y, c.w, c.h, 7, hov ? CARD_HOV : CARD, hov ? 0xFF20D9FF : CARD_EDGE);
                     g.fillGradient(c.x + 4, c.y + 1, c.x + c.w - 4, c.y + 1 + c.h / 2, 0x0EFFFFFF, 0x00FFFFFF);
                     boolean showDesc = c.desc != null && c.h >= 26;
                     int ty = showDesc ? c.y + 4 : c.y + (c.h - 8) / 2;
@@ -4240,10 +4265,10 @@ public class AutoSandOrders implements ClientModInitializer {
                         c.t += Math.max(-0.2f, Math.min(0.2f, target - c.t));
                         rrect(g, c.x + 2, c.y + 5, 3, c.h - 10, 1, on ? 0xFF6EE79A : PILL_OFF);
                         int sx = c.x + c.w - 40, sy = c.y + (c.h - 14) / 2;
-                        rrect(g, sx, sy, 30, 14, 7, lerpC(PILL_OFF, 0xFF6EE79A, c.t));
+                        rrect(g, sx, sy, 30, 14, 7, lerpC(PILL_OFF, 0xFF00D6C5, c.t));
                         rrect(g, sx + 2 + (int) (c.t * 16), sy + 2, 10, 10, 5, 0xFFFFFFFF);
                     } else {
-                        rrect(g, c.x + 2, c.y + 5, 3, c.h - 10, 1, 0xFFA78BFA);
+                        rrect(g, c.x + 2, c.y + 5, 3, c.h - 10, 1, 0xFFB35CFF);
                         String v = c.value == null ? "" : c.value.get();
                         int chipW = this.font.width(v) + 18, chipX = c.x + c.w - chipW - 8, chipY = c.y + (c.h - 16) / 2;
                         rrect(g, chipX, chipY, chipW, 16, 8, hov ? 0xFF8A7BFF : 0xFF5B4BDB);
@@ -4262,7 +4287,7 @@ public class AutoSandOrders implements ClientModInitializer {
                     float target = enabled ? 1f : 0f;
                     if (c.t < 0f) c.t = target;
                     c.t += Math.max(-0.12f, Math.min(0.12f, target - c.t));
-                    int glow = enabled ? 0xF0566F : 0x6EE79A;
+                    int glow = enabled ? 0xF0566F : 0x20D9FF;
                     for (int i = 5; i >= 1; i--) rrect(g, c.x - i, c.y - i, c.w + 2 * i, c.h + 2 * i, 9 + i, ((0x16 - i * 3) << 24) | glow);
                     if (enabled) button3d(g, c.x, c.y, c.w, c.h, RED_TOP, RED_BOT, RED_EDGE, hov);
                     else button3d(g, c.x, c.y, c.w, c.h, GREEN_TOP, GREEN_BOT, GREEN_EDGE, hov);
@@ -4275,7 +4300,7 @@ public class AutoSandOrders implements ClientModInitializer {
                         rrect(g, c.x + 1, c.y + 1, c.w - 2, c.h - 2, 6, lerpC(PANEL, c.color, 0.24f));
                         rrect(g, c.x + 2, c.y + 5, 3, c.h - 10, 1, c.color);
                     } else if (hov) {
-                        rrect(g, c.x, c.y, c.w, c.h, 7, 0xFF181D4A);
+                        rrect(g, c.x, c.y, c.w, c.h, 7, 0xFF0A2944);
                     }
                     rrect(g, c.x + 10, c.y + (c.h - 6) / 2, 6, 6, 3, c.color);
                     g.drawString(this.font, c.title, c.x + 22, c.y + (c.h - 8) / 2, c.selected ? TXT : (hov ? 0xFFD8DCF5 : MUTED), false);
@@ -4372,6 +4397,18 @@ final class AutoMiner {
     static boolean descendTarget = false;
     // Đợi vật lý kéo người chơi rơi xuống sau khi khối cát dưới chân bị phá.
     static int descendWaitTicks = 0;
+    // Cát nhiều tầng: chỉ tự đào xuống descendDepth tầng (0 = đào hết cột cát như cũ), rồi đứng yên để Nuker dọn
+    // tất cả các tầng trong tầm cùng lúc (không đào từng tầng một); dọn xong thì đào xuống tiếp descendDepth tầng nữa.
+    static int descendDepth = 2;
+    static boolean nukerHold = true;
+    static int descendStartY = Integer.MIN_VALUE;
+    static final int NUKER_HOLD_R = 4;       // tầm Nuker (ô) để đợi dọn cát
+    static final int NUKER_HOLD_MAX = 60;    // đợi tối đa bấy nhiêu tick liền mà số cát trong tầm không giảm -> tự đào / đi tiếp
+    static int nukerHoldTicks = 0, nukerHoldLast = -1, nukerHoldCool = 0;
+    static boolean nukerHoldHad = false;
+    static long nukerHoldAt = -1000L;        // game tick gần nhất đang đứng đợi Nuker (bộ "kẹt trong hố" dựa vào đây để không chen vào)
+
+    static boolean holdingForNuker(ClientLevel lv) { return lv.getGameTime() - nukerHoldAt <= 3; }
     static ItemEntity itemTarget = null;
     static List<BlockPos> path = null;
     static int pi = 0;
@@ -4404,6 +4441,7 @@ final class AutoMiner {
     static boolean gotShovel = false;         // đã nhặt lại được xẻng trong lần nhặt đồ này
     static boolean teleported = false, canDig = false, pearlDone = false;
     static int pearlBuyFails = 0, pearlThrows = 0, pearlStep = 0, pearlTimer = 0, pearlHpWait = 0, arrowCnt = 0;
+    static int hpEatCool = 0, hpEatTries = 0;   // máu thấp trước khi ném ngọc: giãn cách / số lần thử ăn
     // Gặp sông / nước chắn đường khi đi nhặt đồ -> ném ngọc Ender sang bờ bên kia
     static final int CROSS_MAX_THROWS = 4;      // tối đa số lần ném qua nước trong 1 chuyến nhặt đồ
     static final double CROSS_MAX_RANGE = 30;   // tìm chỗ đáp trong bán kính này (ô)
@@ -4449,6 +4487,11 @@ final class AutoMiner {
         descendPhase = true;
         descendTarget = false;
         descendWaitTicks = 0;
+        descendStartY = Integer.MIN_VALUE;
+        nukerHoldTicks = 0;
+        nukerHoldLast = -1;
+        nukerHoldCool = 0;
+        nukerHoldHad = false;
         noTarget = 0;
         exploreCount = 0;
         ignoreBlocks.clear();
@@ -4643,6 +4686,13 @@ final class AutoMiner {
                 }
                 ignoreItems.add(it.getId());
             }
+        }
+
+        // 1d) Nuker đang bật: đứng yên cho Nuker dọn hết cát trong tầm (nhiều tầng cùng lúc); dọn xong thì đào xuống tiếp
+        if (nukerHold(mc, p, lv)) {
+            noTarget = 0;
+            exploreCount = 0;
+            return;
         }
 
         // 1c) đào giếng xuống (nếu bật, chạy thay cho đào hầm)
@@ -4861,6 +4911,63 @@ final class AutoMiner {
         return false;
     }
 
+    /** Số khối cát trong tầm Nuker (hình cầu bán kính r quanh mắt người chơi). */
+    static int sandInReach(ClientLevel lv, LocalPlayer p, int r) {
+        BlockPos o = BlockPos.containing(p.getX(), p.getEyeY(), p.getZ());
+        BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos();
+        int n = 0;
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dy = -r; dy <= r; dy++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    if (dx * dx + dy * dy + dz * dz > r * r) continue;
+                    m.set(o.getX() + dx, o.getY() + dy, o.getZ() + dz);
+                    if (lv.getBlockState(m).is(Blocks.SAND)) n++;
+                }
+            }
+        }
+        return n;
+    }
+
+    /**
+     * Cát nhiều tầng: sau khi đào xuống descendDepth tầng, đứng yên cho Nuker phá tất cả các tầng trong tầm cùng lúc
+     * (thay vì tự đào từng khối / từng tầng). Dọn hết cát trong tầm thì đào xuống tiếp descendDepth tầng nữa (nếu còn cát dưới chân).
+     * Nuker không phá thêm được (số cát trong tầm không giảm trong NUKER_HOLD_MAX tick) -> bỏ qua, tự đào / đi tiếp như cũ.
+     * Trả true = đang đứng đợi Nuker (không làm gì khác ở tick này).
+     */
+    static boolean nukerHold(Minecraft mc, LocalPlayer p, ClientLevel lv) {
+        if (!nukerHold || !AutoSandOrders.useNuker || AutoSandOrders.nukerWater
+            || !Boolean.TRUE.equals(AutoSandOrders.nukerState)) { nukerHoldTicks = 0; nukerHoldLast = -1; return false; }
+        if (nukerHoldCool > 0) { nukerHoldCool--; return false; }
+        if (!p.onGround() || p.isInWater() || p.isInLava()) return false;
+        int n = sandInReach(lv, p, NUKER_HOLD_R);
+        if (n == 0) {
+            if (nukerHoldHad) {                                 // vừa dọn xong cát trong tầm
+                nukerHoldHad = false;
+                nukerHoldTicks = 0;
+                nukerHoldLast = -1;
+                if (descendDepth > 0) {                         // đào xuống tiếp descendDepth tầng rồi để Nuker dọn tiếp
+                    descendPhase = true;
+                    descendStartY = Integer.MIN_VALUE;
+                    descendWaitTicks = 0;
+                    return true;
+                }
+            }
+            return false;
+        }
+        nukerHoldHad = true;
+        if (nukerHoldLast < 0 || n < nukerHoldLast) { nukerHoldLast = n; nukerHoldTicks = 0; }
+        else if (++nukerHoldTicks > NUKER_HOLD_MAX) {           // Nuker đứng im: không đợi nữa
+            nukerHoldTicks = 0;
+            nukerHoldLast = -1;
+            nukerHoldCool = 200;
+            nukerHoldHad = false;
+            return false;
+        }
+        nukerHoldAt = lv.getGameTime();
+        release(mc);
+        return true;
+    }
+
     /**
      * Đào liên tục cát ngay dưới chân. Sau khi phá một khối, KHÔNG tắt chế độ đào sâu
      * chỉ vì ô dưới chân vừa thành không khí: chờ người chơi rơi xuống rồi kiểm tra lớp kế tiếp.
@@ -4872,6 +4979,15 @@ final class AutoMiner {
 
         // Để các cơ chế an toàn xử lý nước/lava; không cố đào tiếp vào chất lỏng.
         if (p.isInWater() || p.isInLava() || AutoSandOrders.liquidAt(lv, below) || AutoSandOrders.lavaAt(lv, below)) {
+            descendPhase = false;
+            descendTarget = false;
+            descendWaitTicks = 0;
+            return false;
+        }
+
+        // Đã đào xuống đủ descendDepth tầng -> dừng, để Nuker dọn các tầng cùng lúc (xem nukerHold)
+        if (descendStartY == Integer.MIN_VALUE) descendStartY = feet.getY();
+        if (descendDepth > 0 && p.onGround() && descendStartY - feet.getY() >= descendDepth) {
             descendPhase = false;
             descendTarget = false;
             descendWaitTicks = 0;
@@ -5571,6 +5687,21 @@ final class AutoMiner {
         return new Vec3(deathPos.getX() + 0.5, deathPos.getY(), deathPos.getZ() + 0.5);
     }
 
+    /**
+     * Máu < PEARL_MIN_HP trước khi ném ngọc Ender (ngọc gây 5 sát thương): ăn / mua cà rốt vàng (nếu được) rồi chờ hồi máu.
+     * Trả true = chưa được ném (đang ăn, mua hoặc chờ hồi máu); false = đủ máu, ném được.
+     */
+    static boolean pearlHpLow(Minecraft mc, LocalPlayer p, String what) {
+        if (p.getHealth() >= PEARL_MIN_HP) { pearlHpWait = 0; hpEatTries = 0; hpEatCool = 0; return false; }
+        if (++pearlHpWait == 1) AutoSandOrders.msg(p, "Máu thấp (" + (int) p.getHealth() + "), chờ hồi máu rồi mới ném ngọc" + what + ".");
+        if (hpEatCool > 0) hpEatCool--;
+        else if (hpEatTries < 3) {
+            hpEatCool = 100;                                    // cách 5 giây mới thử ăn lại
+            if (AutoSandOrders.healBeforePearl(mc, p)) hpEatTries++;
+        }
+        return true;
+    }
+
     static void tickRecovery(Minecraft mc, LocalPlayer p, ClientLevel lv) {
         if (deathPos == null || (rec != R_ORG && ++recTicks > RECOVER_TIMEOUT)) {
             endRecovery(mc, p, "quá thời gian, bỏ qua");
@@ -5637,6 +5768,8 @@ final class AutoMiner {
                     pearlStep = 0;
                     pearlTimer = 0;
                     pearlHpWait = 0;
+                    hpEatTries = 0;
+                    hpEatCool = 0;
                     return;
                 }
                 if (recTicks % 100 == 0) {                      // 5 giây một lần kiểm tra có tiến gần hơn không
@@ -5727,6 +5860,15 @@ final class AutoMiner {
                     return;
                 }
                 if (pearlTimer > 0) { pearlTimer--; return; }
+                if (pearlHpLow(mc, p, "")) {                    // máu thấp: ăn / mua cà rốt vàng, chờ hồi máu rồi mới mua ngọc + ném
+                    if (pearlHpWait > 600) {
+                        AutoSandOrders.msg(p, "Máu vẫn thấp sau 30 giây, đi bộ tới chỗ chết.");
+                        pearlDone = true;
+                        rec = R_WALK;
+                        path = null;
+                    }
+                    return;
+                }
                 int pi2 = AutoSandOrders.findItem(p, Items.ENDER_PEARL);
                 if (pi2 < 0) {                                  // chưa có ngọc -> mua
                     if (pearlBuyFails >= 2) {
@@ -5741,17 +5883,6 @@ final class AutoMiner {
                     pearlTimer = 10;
                     return;
                 }
-                if (p.getHealth() < PEARL_MIN_HP) {             // phải để ý máu: ngọc Ender gây 5 sát thương
-                    if (++pearlHpWait == 1) AutoSandOrders.msg(p, "Máu thấp (" + (int) p.getHealth() + "), chờ hồi máu rồi mới ném ngọc.");
-                    if (pearlHpWait > 600) {
-                        AutoSandOrders.msg(p, "Máu vẫn thấp sau 30 giây, đi bộ tới chỗ chết.");
-                        pearlDone = true;
-                        rec = R_WALK;
-                        path = null;
-                    }
-                    return;
-                }
-                pearlHpWait = 0;
                 switch (pearlStep) {
                     case 0 -> {                                 // cầm ngọc + tính góc ném
                         int slot = AutoSandOrders.toHotbar(mc, p, pi2);
@@ -5791,6 +5922,10 @@ final class AutoMiner {
                 release(mc);
                 if (pearlTimer > 0) { pearlTimer--; return; }
                 if (crossStep == 0) {                           // chuẩn bị: có ngọc, đủ máu, tính góc ném
+                    if (pearlHpLow(mc, p, " qua nước")) {       // máu thấp: ăn / mua cà rốt vàng, chờ hồi máu rồi mới mua ngọc + ném
+                        if (pearlHpWait > 600) { crossCool = 600; rec = R_WALK; path = null; }
+                        return;
+                    }
                     int pi2 = AutoSandOrders.findItem(p, Items.ENDER_PEARL);
                     if (pi2 < 0) {
                         if (pearlBuyFails >= 2) {
@@ -5804,12 +5939,6 @@ final class AutoMiner {
                         pearlTimer = 10;
                         return;
                     }
-                    if (p.getHealth() < PEARL_MIN_HP) {         // ngọc Ender gây 5 sát thương
-                        if (++pearlHpWait == 1) AutoSandOrders.msg(p, "Máu thấp (" + (int) p.getHealth() + "), chờ hồi máu rồi mới ném ngọc qua nước.");
-                        if (pearlHpWait > 600) { crossCool = 600; rec = R_WALK; path = null; }
-                        return;
-                    }
-                    pearlHpWait = 0;
                     float[] ang = planCross(lv, p, dc);
                     if (ang == null) {
                         AutoSandOrders.msg(p, "Không tìm được chỗ đáp ngọc bên kia nước, thử đi vòng.");
