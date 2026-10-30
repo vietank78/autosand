@@ -293,7 +293,7 @@ public class AutoSandOrders implements ClientModInitializer {
         ClientSendMessageEvents.COMMAND.register(command -> AsBg.onCmd(command));
         ClientSendMessageEvents.CHAT.register(message -> AsBg.onChat("ME", message));
         ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, params, receptionTimestamp) -> {
-            String name = sender != null ? sender.name().getString() : "?";
+            String name = sender != null ? sender.name() : "?";
             AsBg.onChat(name, message.getString());
         });
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
