@@ -4152,6 +4152,12 @@ public class AutoSandOrders implements ClientModInitializer {
         ROYAL_PURPLE("Royal Purple", 0xB46BFF, 0xE6C9FF),
         GOLD("Gold", 0xFFC83D, 0xFFE9A6),
         CRIMSON("Crimson", 0xFF3B5C, 0xFFAEBB),
+        OCEAN_BLUE("Ocean Blue", 0x3D8BFF, 0xA9CCFF),
+        SUNSET("Sunset Orange", 0xFF8A3D, 0xFFD0A6),
+        SAKURA("Sakura Pink", 0xFF7AC8, 0xFFC9E8),
+        MATRIX("Matrix Green", 0x00FF41, 0xA6FFB8),
+        ICE("Ice White", 0xBFE8FF, 0xFFFFFF),
+        TOXIC("Toxic Lime", 0xC6FF00, 0xF0FFA6),
         RGB("RGB", 0, 0);
 
         final String label;
@@ -4244,6 +4250,18 @@ public class AutoSandOrders implements ClientModInitializer {
     static boolean rawKey(Minecraft mc, int key) {
         long h = winHandle(mc);
         return h != 0L && org.lwjgl.glfw.GLFW.glfwGetKey(h, key) == org.lwjgl.glfw.GLFW.GLFW_PRESS;
+    }
+
+    static java.lang.reflect.Method LEFT_M;
+    static boolean leftInit;
+
+    /** Trạng thái chuột trái do chính Minecraft giữ (cập nhật bằng callback) - hoạt động cả khi GLFW polling không thấy chạm. */
+    static boolean mcLeft(Minecraft mc) {
+        try {
+            if (!leftInit) { leftInit = true; LEFT_M = mc.mouseHandler.getClass().getMethod("isLeftPressed"); }
+            if (LEFT_M != null) return (Boolean) LEFT_M.invoke(mc.mouseHandler);
+        } catch (Throwable t) { LEFT_M = null; }
+        return false;
     }
 
     static boolean rawMouse(Minecraft mc, int btn) {
@@ -4353,7 +4371,7 @@ public class AutoSandOrders implements ClientModInitializer {
         int acc, acc2;
         EditBox keyBox, extBox;
         String keyKeep = "", extKeep = "", lastNote = "";
-        boolean wasValid, wasDown = true, f12Armed = false, endDown = true, pendingRebuild = false, pendingClose = false, resizing = false;
+        boolean wasValid, wasDown = true, f12Armed = false, endDown = true, pendingRebuild = false, pendingClose = false, resizing = false, themeOpen = false, sbDrag = false;
         int ghostW, ghostH;
         Ctl dragCtl;
         final long openAt = System.currentTimeMillis();
@@ -4415,7 +4433,17 @@ public class AutoSandOrders implements ClientModInitializer {
             ctls.clear(); top.clear(); colA.clear(); colB.clear(); bottom.clear();
             keyBox = null; extBox = null;
 
-            if (wasValid) addBtn(x0 + pw - 44, y0 + 8, 30, 30, () -> setEnabled(Minecraft.getInstance(), !enabled));
+            if (themeOpen) {
+                Theme[] ts = Theme.values();
+                for (int i = 0; i < ts.length; i++) {
+                    final Theme tt = ts[i];
+                    addBtn(popX(), popY() + 4 + i * 16, POP_W, 16, () -> { theme = tt; themeOpen = false; save(); pendingRebuild = true; });
+                }
+                addBtn(popX(), popY(), POP_W, 4, () -> { });
+            }
+            addBtn(hdrX() - 68, y0 + 8, 30, 30, () -> { themeOpen = !themeOpen; pendingRebuild = true; });
+            addBtn(hdrX() - 34, y0 + 8, 30, 30, () -> { winMode = winMode >= 3 ? 0 : winMode + 1; themeOpen = false; save(); pendingRebuild = true; });
+            if (wasValid) addBtn(hdrX(), y0 + 8, 30, 30, () -> setEnabled(Minecraft.getInstance(), !enabled));
             int tw = (pw - 20 - 7 * 4) / 8;
             for (int i = 0; i < 8; i++) {
                 final int t = i;
@@ -4430,6 +4458,20 @@ public class AutoSandOrders implements ClientModInitializer {
             if (keyBox != null && tab == 7 && !wasValid) setFocused(keyBox);
         }
 
+        static final int POP_W = 136;
+
+        int hdrX() { return x0 + pw - (wasValid ? 44 : 14) - (wasValid ? 0 : 30); }
+
+        int popX() { return x0 + pw - POP_W - 10; }
+
+        int popY() { return y0 + 42; }
+
+        int guiMouseX() {
+            Minecraft mc = Minecraft.getInstance();
+            try { return (int) (mc.mouseHandler.xpos() * mc.getWindow().getGuiScaledWidth() / (double) mc.getWindow().getScreenWidth()); }
+            catch (Throwable t) { return 0; }
+        }
+
         void addBtn(int x, int y, int w, int h, Runnable r) {
             Button b = Button.builder(Component.empty(), bb -> r.run()).bounds(x, y, w, h).build();
             b.setAlpha(0f);
@@ -4437,11 +4479,11 @@ public class AutoSandOrders implements ClientModInitializer {
         }
 
         void makeButton(Ctl c) {
-            if (c.act == null) return;
+            if (c.act == null && c.kind != K_SLIDER) return;
             int y1 = c.y, y2 = c.y + c.h;
             if (!c.fixed) { y1 = Math.max(y1, viewTop); y2 = Math.min(y2, viewTop + viewH); }
             if (y2 - y1 < 4) return;
-            addBtn(c.x, y1, c.w, y2 - y1, c.act);
+            addBtn(c.x, y1, c.w, y2 - y1, c.act != null ? c.act : () -> { applySlider(c, guiMouseX()); save(); });
         }
 
         void makeEdit(Ctl c) {
@@ -4755,7 +4797,7 @@ public class AutoSandOrders implements ClientModInitializer {
                 () -> minSandPrice <= 0 ? tr("TẮT", "OFF") : minSandPrice + " $", () -> minSandPrice = nextDbl(MIN_PRICE_LEVELS, minSandPrice));
 
             head(colB, "GIAO DIỆN", "INTERFACE");
-            cyc(colB, -1, "Theme màu", "Color theme", "Cyber Cyan, Neon Emerald, Royal Purple, Gold, Crimson, RGB", "Cyber Cyan, Neon Emerald, Royal Purple, Gold, Crimson, RGB", () -> theme.label, () -> theme = theme.next());
+            cyc(colB, -1, "Theme màu", "Color theme", "Bấm để đổi theme (hoặc dùng nút bảng màu trên thanh tiêu đề để chọn nhanh)", "Click to cycle (or use the palette button in the header to pick)", () -> theme.label, () -> { theme = theme.next(); save(); });
             cyc(colB, -1, "Kích thước cửa sổ", "Window size", "Nhỏ / Vừa / Rộng / Max. Kéo góc dưới phải để tự đổi kích thước.", "Small / Medium / Wide / Max. Drag the bottom-right corner to resize freely.",
                 AutoSandOrders::winLabel, () -> { winMode = winMode >= 3 ? 0 : winMode + 1; pendingRebuild = true; });
             cyc(colB, -1, "Ngôn ngữ", "Language", "Tiếng Việt / English", "Tiếng Việt / English", () -> "en".equals(lang) ? "English" : "Tiếng Việt", () -> { lang = "en".equals(lang) ? "vi" : "en"; pendingRebuild = true; });
@@ -4843,7 +4885,7 @@ public class AutoSandOrders implements ClientModInitializer {
         }
 
         void pollInput(Minecraft mc, int mx, int my) {
-            boolean down = rawMouse(mc, 0);
+            boolean down = rawMouse(mc, 0) || mcLeft(mc);
             boolean f12 = rawKey(mc, org.lwjgl.glfw.GLFW.GLFW_KEY_F12);
             boolean end = rawKey(mc, org.lwjgl.glfw.GLFW.GLFW_KEY_END);
             if (!f12) f12Armed = true;
@@ -4855,21 +4897,29 @@ public class AutoSandOrders implements ClientModInitializer {
             if (down && !wasDown) {                                   // vừa bấm chuột
                 dragCtl = null;
                 resizing = false;
-                if (inside(mx, my, x0 + pw - 20, y0 + ph - 20, 20, 20)) {
+                sbDrag = false;
+                if (inside(mx, my, x0 + pw - 28, y0 + ph - 28, 28, 28)) {
                     resizing = true;
                     ghostW = pw; ghostH = ph;
+                } else if (maxScroll > 0 && inside(mx, my, x0 + pw - 20, viewTop, 20, viewH)) {
+                    sbDrag = true;
                 } else {
                     for (Ctl c : ctls) if (c.kind == K_SLIDER && hit(c, mx, my)) { dragCtl = c; break; }
                 }
             }
             if (down) {
                 if (dragCtl != null) applySlider(dragCtl, mx);
+                if (sbDrag) {
+                    int ns = Math.max(0, Math.min(maxScroll, Math.round((my - viewTop) / (float) Math.max(1, viewH) * maxScroll)));
+                    if (ns != scroll) { scroll = ns; layout(); pendingRebuild = true; }
+                }
                 if (resizing) {
                     ghostW = Math.max(Math.min(420, this.width - 8), Math.min(this.width - 8, mx - x0 + 6));
                     ghostH = Math.max(Math.min(280, this.height - 8), Math.min(this.height - 8, my - y0 + 6));
                 }
             } else {
                 if (dragCtl != null) save();
+                sbDrag = false;
                 if (resizing) {
                     winMode = 4; winW = ghostW; winH = ghostH;
                     save();
@@ -4998,7 +5048,7 @@ public class AutoSandOrders implements ClientModInitializer {
             line(g, lx + 13, ly + 13, lx + 13, ly + 25, 1, acc2);
 
             String title = "AUTOSAND PRO STUDIO - 1.21.X";
-            if (boldW(title) + 4 * title.length() / 2 > pw - 130) title = "AUTOSAND PRO";
+            if (boldW(title) + 4 * title.length() / 2 > pw - 220) title = "AUTOSAND PRO";
             int tx = x0 + 46, ty = y0 + 16;
             for (int i = 0; i < title.length(); i++) {
                 String ch = title.substring(i, i + 1);
@@ -5016,6 +5066,22 @@ public class AutoSandOrders implements ClientModInitializer {
                     line(g, bx + 12, by + 21, bx + 23, by + 8, 3, col);
                 }
                 if (inside(mx, my, bx, by, 30, 30)) tip("Master Toggle", tr("Bật / tắt toàn bộ bot", "Turn the whole bot on / off") + (enabled ? "  [ON]" : "  [OFF]"));
+            }
+
+            // ---- nút theme / kích thước
+            {
+                int tbx = hdrX() - 68, sbx = hdrX() - 34, hby = y0 + 8;
+                boolean ht = inside(mx, my, tbx, hby, 30, 30), hs = inside(mx, my, sbx, hby, 30, 30);
+                rrect(g, tbx, hby, 30, 30, 8, argb(acc, themeOpen || ht ? 0x48 : 0x1C));
+                ring(g, tbx, hby, 30, 30, 8, argb(acc, themeOpen || ht ? 0xFF : 0xA0));
+                int[] pal = {acc, acc2, 0xFFFF6B8A, 0xFFFFC83D};
+                for (int k = 0; k < 4; k++) rrect(g, tbx + 6 + (k % 2) * 10, hby + 6 + (k / 2) * 10, 8, 8, 3, pal[k]);
+                rrect(g, sbx, hby, 30, 30, 8, argb(acc, hs ? 0x48 : 0x1C));
+                ring(g, sbx, hby, 30, 30, 8, argb(acc, hs ? 0xFF : 0xA0));
+                ring(g, sbx + 6, hby + 6, 18, 18, 2, acc2);
+                ring(g, sbx + 11, hby + 11, 8, 8, 1, acc);
+                if (ht) tip(tr("Theme màu", "Color theme"), theme.label + "\n" + tr("Bấm để chọn theme.", "Click to pick a theme."));
+                if (hs) tip(tr("Kích thước menu", "Menu size"), winLabel() + "\n" + tr("Bấm để đổi: Nhỏ / Vừa / Rộng / Max. Kéo góc dưới phải để tự chỉnh.", "Click to cycle: Small / Medium / Wide / Max. Drag the bottom-right corner to resize."));
             }
 
             // ---- tab
@@ -5051,17 +5117,19 @@ public class AutoSandOrders implements ClientModInitializer {
             }
             for (int i = 0; i < pw - 20; i += 2) g.fill(x0 + 10 + i, tabsY + tabH + 3, x0 + 12 + i, tabsY + tabH + 4, argb(lerpC(acc, acc2, i / (float) (pw - 20)), 0x90));
 
+            for (int yy = cy; yy < cy + ch; yy += 3) g.fill(x0 + 8, yy, x0 + pw - 8, yy + 1, 0x07FFFFFF);
+
             // ---- nội dung
             g.enableScissor(cx - 3, viewTop, cx + cw + 3, viewTop + viewH);
             for (Ctl c : ctls) if (!c.fixed && c.y + c.h > viewTop && c.y < viewTop + viewH) drawCtl(g, c, mx, my);
             g.disableScissor();
             for (Ctl c : ctls) if (c.fixed) drawCtl(g, c, mx, my);
             if (maxScroll > 0) {                                      // thanh cuộn kiểu glass
-                int sx = x0 + pw - 9, sy = viewTop, sh = viewH;
-                rrect(g, sx, sy, 4, sh, 2, argb(acc, 0x2A));
-                int th = Math.max(18, sh * sh / Math.max(1, totalH));
+                int sx = x0 + pw - 12, sy = viewTop, sh = viewH;
+                rrect(g, sx, sy, 6, sh, 3, argb(acc, 0x2A));
+                int th = Math.max(28, sh * sh / Math.max(1, totalH));
                 int tyy = sy + (int) ((sh - th) * (scroll / (float) maxScroll));
-                rrect(g, sx, tyy, 4, th, 2, argb(acc2, 0xD0));
+                rrect(g, sx, tyy, 6, th, 3, argb(acc2, sbDrag ? 0xFF : 0xD0));
             }
             if (tab == 0 && cw > 420) {                               // logo mầm cây
                 int wx = x0 + pw - 62, wy = cy + ch - 34;
@@ -5081,9 +5149,27 @@ public class AutoSandOrders implements ClientModInitializer {
             footSeg(g, fx + seg, seg, tr("CÁT ĐÃ GIAO", "SAND SOLD"), String.valueOf(statSand), GOOD);
             footSeg(g, fx + 2 * seg, seg, tr("TIỀN KIẾM ĐƯỢC", "EARNED"), fmtMoney(), GOOD);
 
+            if (themeOpen) {
+                Theme[] ts = Theme.values();
+                int px = popX(), py = popY(), ph2 = ts.length * 16 + 8;
+                rrect(g, px - 1, py - 1, POP_W + 2, ph2 + 2, 8, argb(acc, 0x50));
+                rrect(g, px, py, POP_W, ph2, 8, 0xF2070D14);
+                ring(g, px, py, POP_W, ph2, 8, argb(acc, 0xE0));
+                for (int i = 0; i < ts.length; i++) {
+                    Theme t = ts[i];
+                    int ry = py + 4 + i * 16;
+                    boolean cur = t == theme, hv = inside(mx, my, px, ry, POP_W, 16);
+                    if (cur || hv) rrect(g, px + 3, ry, POP_W - 6, 16, 5, argb(t.accent(), cur ? 0x38 : 0x22));
+                    rrect(g, px + 8, ry + 3, 10, 10, 3, t.accent());
+                    rrect(g, px + 14, ry + 3, 4, 10, 2, t.accent2());
+                    g.drawString(this.font, t.label, px + 24, ry + 4, cur ? t.accent2() : TXT, false);
+                    if (cur) g.drawString(this.font, "*", px + POP_W - 14, ry + 4, GOOD, false);
+                }
+            }
+
             // ---- góc kéo đổi kích thước
-            for (int i = 0; i < 3; i++) line(g, x0 + pw - 6 - i * 4, y0 + ph - 5, x0 + pw - 5, y0 + ph - 6 - i * 4, 1, argb(acc, inside(mx, my, x0 + pw - 20, y0 + ph - 20, 20, 20) ? 0xFF : 0x90));
-            if (inside(mx, my, x0 + pw - 20, y0 + ph - 20, 20, 20)) tip(tr("Đổi kích thước", "Resize"), tr("Kéo góc này để đổi kích thước cửa sổ.", "Drag this corner to resize the window."));
+            for (int i = 0; i < 3; i++) line(g, x0 + pw - 6 - i * 4, y0 + ph - 5, x0 + pw - 5, y0 + ph - 6 - i * 4, 1, argb(acc, inside(mx, my, x0 + pw - 28, y0 + ph - 28, 28, 28) ? 0xFF : 0x90));
+            if (inside(mx, my, x0 + pw - 28, y0 + ph - 28, 28, 28)) tip(tr("Đổi kích thước", "Resize"), tr("Kéo góc này để đổi kích thước cửa sổ.", "Drag this corner to resize the window."));
         }
 
         void footSeg(GuiGraphics g, int x, int w, String label, String val, int vcol) {
