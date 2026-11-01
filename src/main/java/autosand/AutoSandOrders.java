@@ -424,7 +424,7 @@ public class AutoSandOrders implements ClientModInitializer {
             if (mc.player == null || storedKey.isBlank() || checking) return;
             checking = true;
             String player = mc.player.getName().getString();
-            String body = "{"key":"" + storedKey + "","authType":"player","playerName":"" + player + ""}";
+            String body = "{\"key\":\"" + storedKey + "\",\"authType\":\"player\",\"playerName\":\"" + player + "\"}";
             
             try {
                 HttpRequest req = HttpRequest.newBuilder()
