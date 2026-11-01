@@ -83,7 +83,7 @@ import java.util.regex.Pattern;
  * AUTOSAND PREMIUM CLIENT MOD (Fabric 1.21.x - Mojang Mappings)
  * Glass Theme GUI 8 Tabs, License Key System, AI Mining & Survival Anti-Stuck.
  */
-public class AutoSandPremiumMod implements ClientModInitializer {
+public class AutoSandOrders implements ClientModInitializer {
 
     // =========================================================================
     // 1. CHẾ ĐỘ & CẤU HÌNH HỆ THỐNG
