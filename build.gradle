@@ -75,6 +75,10 @@ task obfuscate(type: ProGuardTask) {
     libraryjars "${System.getProperty('java.home')}/jmods/java.net.http.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
 
     configuration 'proguard-rules.pro'
+
+    // Khai báo thêm ở đây (không chỉ trong proguard-rules.pro) để chắc chắn được áp dụng —
+    // một số bản proguard-gradle không đọc đúng thứ tự -ignorewarnings nằm cuối file configuration.
+    ignorewarnings()
 }
 
 // obfuscate KHÔNG tự chạy mỗi lần `build` — bật dòng dưới nếu muốn build luôn kèm obfuscate;
