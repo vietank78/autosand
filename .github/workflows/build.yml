@@ -31,9 +31,19 @@ jobs:
       - name: Build JAR
         run: gradle build --no-daemon
 
-      - name: Upload JAR
+      - name: Obfuscate JAR (ProGuard)
+        run: gradle obfuscate --no-daemon
+
+      - name: Upload JAR (bản thường)
         uses: actions/upload-artifact@v4
         with:
           name: AutoSandNew-JAR
           path: build/libs/*.jar
+          if-no-files-found: error
+
+      - name: Upload JAR (bản đã obfuscate)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoSandNew-JAR-obf
+          path: build/libs/*-obf.jar
           if-no-files-found: error
