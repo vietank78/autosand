@@ -68,6 +68,14 @@ task obfuscate(type: ProGuardTask) {
 
     // Toàn bộ classpath biên dịch (Minecraft/Fabric API/Baritone) Loom đã remap sẵn — dùng làm libraryjars,
     // KHÔNG gộp vào jar, chỉ để ProGuard phân tích tham chiếu bên ngoài.
+    // LƯU Ý (nguyên nhân IncompleteClassHierarchyException): compileClasspath là Minecraft ở NAMED
+    // mappings (loom.officialMojangMappings()), còn injars ở trên (remapJar.archiveFile) lại là
+    // INTERMEDIARY mappings -> hai bên không cùng tên lớp, ProGuard không resolve được hierarchy thật
+    // của Minecraft (đang tạm fix bằng -dontoptimize trong proguard-rules.pro). Muốn optimize lại:
+    //   (a) thay dòng libraryjars này bằng jar Minecraft/Fabric API bản intermediary (trong cache của
+    //       Loom), hoặc
+    //   (b) đổi injars ở trên thành jar.archiveFile (named, khớp compileClasspath) và cấu hình lại
+    //       remapJar để nhận jar đã obfuscate làm input thay vì jar gốc.
     libraryjars sourceSets.main.compileClasspath
 
     // Module JDK 21 (bắt buộc với java.* API như HttpClient dùng trong License)

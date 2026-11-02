@@ -3,7 +3,18 @@
 # Fabric/Loom KHÔNG hỗ trợ ProGuard trực tiếp trong pipeline build thường -> xem README_PROTECT.md
 # để biết cách gắn 1 Gradle task riêng chạy ProGuard trên remapJar output, tạo ra bản "-obf.jar" để phát hành.
 
--optimizationpasses 5
+# --- FIX (lỗi IncompleteClassHierarchyException khi chạy `obfuscate`) ---
+# ProGuard optimize cần biết đầy đủ class hierarchy của Minecraft để gộp kiểu tại các điểm merge
+# (ví dụ AutoSandScreen/ProStudioScreen trong AutoSandOrders.tick()). Nhưng libraryjars hiện tại
+# (sourceSets.main.compileClasspath trong build.gradle) là Minecraft ở NAMED mappings, trong khi
+# injars (remapJar.archiveFile) lại là INTERMEDIARY mappings (class_310, class_437...) -> ProGuard
+# không tìm thấy net.minecraft.class_437 trong libraryjars nên không tính được superclass chung,
+# ném IncompleteClassHierarchyException và dừng build.
+# -dontoptimize bỏ qua đúng giai đoạn này (vẫn giữ nguyên shrink + rename). Khi nào sửa libraryjars
+# để khớp mapping với injars (xem ghi chú tại dòng libraryjars trong build.gradle) thì xoá dòng
+# -dontoptimize và bật lại -optimizationpasses bên dưới.
+-dontoptimize
+# -optimizationpasses 5
 -overloadaggressively
 -repackageclasses ''
 -allowaccessmodification
