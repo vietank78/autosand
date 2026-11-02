@@ -1,6 +1,16 @@
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        // ProGuard KHÔNG có plugin id publish lên Gradle Plugin Portal cho project Java thường
+        // (chỉ Android mới có 'com.guardsquare.proguard' qua plugins{}). Phải thêm qua classpath thế này.
+        classpath 'com.guardsquare:proguard-gradle:7.5.0'
+    }
+}
+
 plugins {
     id 'net.fabricmc.fabric-loom-remap' version '1.14.10'
-    id 'com.guardsquare.proguard' version '7.5.0'
 }
 
 version = '1.0.0'
