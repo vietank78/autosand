@@ -1,5 +1,6 @@
 plugins {
     id 'net.fabricmc.fabric-loom-remap' version '1.14.10'
+    id 'com.guardsquare.proguard' version '7.5.0'
 }
 
 version = '1.0.0'
@@ -46,3 +47,26 @@ tasks.named('jar') {
         rename { 'baritone.jar' }
     }
 }
+
+// ===================== PROGUARD — chạy SAU remapJar, trên jar đã remap sang Mojang mappings =====================
+import proguard.gradle.ProGuardTask
+
+task obfuscate(type: ProGuardTask) {
+    dependsOn remapJar
+    injars  remapJar.archiveFile.get().asFile
+    outjars layout.buildDirectory.file("libs/${base.archivesName.get()}-${version}-obf.jar").get().asFile
+
+    // Toàn bộ classpath biên dịch (Minecraft/Fabric API/Baritone) Loom đã remap sẵn — dùng làm libraryjars,
+    // KHÔNG gộp vào jar, chỉ để ProGuard phân tích tham chiếu bên ngoài.
+    libraryjars sourceSets.main.compileClasspath
+
+    // Module JDK 21 (bắt buộc với java.* API như HttpClient dùng trong License)
+    libraryjars "${System.getProperty('java.home')}/jmods/java.base.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+    libraryjars "${System.getProperty('java.home')}/jmods/java.net.http.jmod", jarfilter: '!**.jar', filter: '!module-info.class'
+
+    configuration 'proguard-rules.pro'
+}
+
+// obfuscate KHÔNG tự chạy mỗi lần `build` — bật dòng dưới nếu muốn build luôn kèm obfuscate;
+// để comment lại nếu muốn chạy tay bằng `./gradlew obfuscate` cho đỡ chậm lúc đang code.
+// build.dependsOn obfuscate
