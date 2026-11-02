@@ -1,7 +1,5 @@
 package autosand;
 
-import autosand.crypto.StringDecryptor;
-import autosand.crypto.AntiDebug;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.google.gson.JsonArray;
@@ -99,6 +97,9 @@ import java.util.function.Predicate;
 import java.util.function.IntConsumer;
 import java.util.function.IntFunction;
 import java.util.function.IntSupplier;
+
+import autosand.crypto.StringDecryptor;
+import autosand.crypto.AntiDebug;
 
 /**
  * AutoSand Pro Studio  -  AutoSandOrders (Fabric 1.21.x, Mojang mappings, Java 21)
@@ -293,9 +294,7 @@ public class AutoSandOrders implements ClientModInitializer {
     // ----------------------------- KHỞI TẠO -----------------------------
     @Override
     public void onInitializeClient() {
-        public void onInitializeClient() {
-    AntiDebug.check();
-    // ... giữ nguyên phần còn lại
+        AntiDebug.check();
         License.init();
         load();
         ClientTickEvents.END_CLIENT_TICK.register(AutoSandOrders::tick);
@@ -518,10 +517,10 @@ public class AutoSandOrders implements ClientModInitializer {
         private License() { }
 
         static final String API_BASE = StringDecryptor.d(
-    "7ITxtuvS0o61JSDqwO7zT+QuJrYC86BZysNzRWvXnJPp32HAIs7YWDh64loYiJG/",
-    "ogrftRfaeXxSZpPjGlkelQ=="
-);
-private static final String VERIFY_URL = API_BASE + "/verify";
+            "7ITxtuvS0o61JSDqwO7zT+QuJrYC86BZysNzRWvXnJPp32HAIs7YWDh64loYiJG/",
+            "ogrftRfaeXxSZpPjGlkelQ=="
+        );
+        private static final String VERIFY_URL = API_BASE + "/verify";
         private static final long CHECK_INTERVAL_NS = 30_000_000_000L;
         private static final long OFFLINE_GRACE_NS = 15L * 60_000_000_000L;
         private static final long SALT = new java.security.SecureRandom().nextLong();
