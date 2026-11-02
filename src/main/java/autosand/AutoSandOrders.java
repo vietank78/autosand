@@ -1492,7 +1492,7 @@ public class AutoSandOrders implements ClientModInitializer {
 
         if (openGui && mc.screen == null) {
             openGui = false;
-            mc.setScreen(new AutoSandScreen());
+            mc.setScreen(License.valid() ? new ProStudioScreen() : new AutoSandScreen());   // menu mới Pro Studio (chưa có key -> menu cũ để nhập key)
             return;
         }
         AutoMiner.arrowTick(mc, p);                          // mũi tên chỉ đường tới chỗ chết
@@ -4317,7 +4317,7 @@ public class AutoSandOrders implements ClientModInitializer {
         static void render(GuiGraphics g) {
             Minecraft mc = Minecraft.getInstance();
             LocalPlayer p = mc.player;
-            if (!hudOn || !enabled || p == null || mc.options.hideGui || mc.screen instanceof AutoSandScreen) return;
+            if (!hudOn || !enabled || p == null || mc.options.hideGui || mc.screen instanceof AutoSandScreen || mc.screen instanceof ProStudioScreen) return;
             int acc = theme.accent(), acc2 = theme.accent2();
             String l1 = stateText();
             int sp = shovelPct(p);
@@ -4331,6 +4331,427 @@ public class AutoSandOrders implements ClientModInitializer {
         }
     }
 
+    // ============================== MENU MỚI: PRO STUDIO (Cyber Neon) ==============================
+    /** Menu kiểu "Pro Studio": gắn trực tiếp vào cài đặt thật của mod. Menu đầy đủ cũ (AutoSandScreen) vẫn mở được bằng nút "Menu đầy đủ". */
+    static class ProStudioScreen extends Screen {
+        static final int WHITE = 0xFFF4F7FF, MUTED = 0xFFB7C5E4, PURPLE = 0xFFB64BFF, GREEN = 0xFF31F39A, RED = 0xFFFF315B, GOLD = 0xFFFFD34E;
+        static int lastPsTab = 0;
+
+        record Hit(int x, int y, int w, int h, Runnable act) {
+            boolean has(int mx, int my) { return mx >= x && my >= y && mx < x + w && my < y + h; }
+        }
+
+        final List<Hit> hits = new ArrayList<>();
+        int tab = lastPsTab, px, py, pw, ph, acc, acc2;
+        boolean tight, wasDown = true, f12Armed = false;
+
+        ProStudioScreen() { super(Component.literal("AutoSand Pro Studio")); }
+
+        @Override
+        public boolean isPauseScreen() { return false; }
+
+        // ---------------------------------------------------------------- nhập chuột (không phụ thuộc chữ ký mouseClicked của từng bản MC)
+        static int guiMx(Minecraft mc) {
+            try { return (int) (mc.mouseHandler.xpos() * mc.getWindow().getGuiScaledWidth() / (double) mc.getWindow().getScreenWidth()); }
+            catch (Throwable t) { return -1; }
+        }
+
+        static int guiMy(Minecraft mc) {
+            try { return (int) (mc.mouseHandler.ypos() * mc.getWindow().getGuiScaledHeight() / (double) mc.getWindow().getScreenHeight()); }
+            catch (Throwable t) { return -1; }
+        }
+
+        @Override
+        public void tick() {
+            super.tick();
+            Minecraft mc = Minecraft.getInstance();
+            poll(mc, guiMx(mc), guiMy(mc));
+        }
+
+        void poll(Minecraft mc, int mx, int my) {
+            boolean down = rawMouse(mc, 0) || mcLeft(mc);
+            boolean f12 = rawKey(mc, org.lwjgl.glfw.GLFW.GLFW_KEY_F12);
+            if (!f12) f12Armed = true;
+            else if (f12Armed) { onClose(); return; }
+            if (down && !wasDown) {
+                for (int i = hits.size() - 1; i >= 0; i--) {
+                    Hit h = hits.get(i);
+                    if (h.has(mx, my)) { h.act().run(); break; }
+                }
+            }
+            wasDown = down;
+        }
+
+        // ---------------------------------------------------------------- vẽ cơ bản
+        void f(GuiGraphics g, int x, int y, int w, int h, int c) { if (w > 0 && h > 0) g.fill(x, y, x + w, y + h, c); }
+
+        void round(GuiGraphics g, int bx, int by, int bw, int bh, int radius, int color) {
+            int r = Math.max(0, Math.min(radius, Math.min(bw, bh) / 2));
+            for (int row = 0; row < bh; row++) {
+                int inset = 0;
+                if (row < r) {
+                    double dy = r - row - 0.5;
+                    inset = r - (int) Math.sqrt(Math.max(0, r * r - dy * dy));
+                } else if (row >= bh - r) {
+                    double dy = row - (bh - r) + 0.5;
+                    inset = r - (int) Math.sqrt(Math.max(0, r * r - dy * dy));
+                }
+                f(g, bx + inset, by + row, bw - inset * 2, 1, color);
+            }
+        }
+
+        void t(GuiGraphics g, String s, int x, int y, int c) { g.drawString(this.font, s, x, y, c, false); }
+
+        void ct(GuiGraphics g, String s, int cx, int y, int c) { t(g, s, cx - this.font.width(s) / 2, y, c); }
+
+        String fit(String s, int maxW) {
+            if (this.font.width(s) <= maxW) return s;
+            while (s.length() > 1 && this.font.width(s + "..") > maxW) s = s.substring(0, s.length() - 1);
+            return s + "..";
+        }
+
+        void icon(GuiGraphics g, int id, int x, int y, int s, int col) {
+            String[] rows = AutoSandScreen.ICONS[id];
+            for (int r = 0; r < rows.length; r++)
+                for (int k = 0; k < rows[r].length(); k++)
+                    if (rows[r].charAt(k) == '#') f(g, x + k * s, y + r * s, s, s, col);
+        }
+
+        void hit(int x, int y, int w, int h, Runnable r) { hits.add(new Hit(x, y, w, h, r)); }
+
+        void card(GuiGraphics g, int bx, int by, int bw, int bh) {
+            round(g, bx - 3, by - 3, bw + 6, bh + 6, 15, 0x183F9FFF);
+            round(g, bx - 1, by - 1, bw + 2, bh + 2, 13, 0x244A42FF);
+            round(g, bx, by, bw, bh, 12, 0xE914203B);
+            round(g, bx + 1, by + 1, bw - 2, bh - 2, 11, 0xD91A2948);
+            f(g, bx + 12, by, bw - 24, 2, acc);
+            f(g, bx, by + 12, 2, bh - 24, acc);
+            f(g, bx + bw - 2, by + 12, 2, bh - 24, 0xAA42BFFF);
+            f(g, bx + 12, by + bh - 2, bw - 24, 2, 0xAA42BFFF);
+        }
+
+        void pill(GuiGraphics g, String s, int bx, int by, int bw, int bh, Runnable act) {
+            round(g, bx, by, bw, bh, bh / 2, 0xFF101B35);
+            round(g, bx + 1, by + 1, bw - 2, bh - 2, bh / 2, 0xFF243454);
+            round(g, bx + 2, by + 4, 4, bh - 8, 2, acc);
+            ct(g, fit(s, bw - 16), bx + bw / 2 + 2, by + (bh - 8) / 2, WHITE);
+            hit(bx, by, bw, bh, act);
+        }
+
+        void toggle(GuiGraphics g, String name, boolean val, int bx, int by, int bw, Runnable act) {
+            int rh = tight ? 28 : 34, sh = tight ? 18 : 22, sw = sh * 2 + 2;
+            t(g, fit(name, bw - sw - 24), bx + 8, by + (rh - 8) / 2 - 1, WHITE);
+            int sx = bx + bw - sw - 8, sy = by + (rh - sh) / 2 - 1;
+            round(g, sx, sy, sw, sh, sh / 2, val ? acc : 0xFF53617C);
+            round(g, sx + (val ? sw - sh + 2 : 2), sy + 2, sh - 4, sh - 4, (sh - 4) / 2, 0xFFFFFFFF);
+            f(g, bx + 8, by + rh - 2, bw - 16, 1, 0x334C6A96);
+            hit(bx, by, bw, rh, () -> { act.run(); save(); });
+        }
+
+        void button(GuiGraphics g, String s, int bx, int by, int bw, int bh, boolean sel, Runnable act) {
+            round(g, bx + 2, by + 3, bw, bh, 10, 0x77000000);
+            round(g, bx, by, bw, bh, 10, sel ? 0xFF49227B : 0xFF1A2947);
+            if (sel) { round(g, bx + 1, by + 1, bw - 2, bh - 2, 9, 0xFF6428B2); f(g, bx + 10, by, bw - 20, 2, acc); }
+            else f(g, bx + 12, by, bw - 24, 1, 0x8856CFFF);
+            ct(g, fit(s, bw - 8), bx + bw / 2, by + (bh - 8) / 2, WHITE);
+            hit(bx, by, bw, bh, act);
+        }
+
+        void stepper(GuiGraphics g, String label, int bx, int by, Runnable dec, Runnable inc) {
+            int ph2 = tight ? 22 : 28;
+            t(g, label, bx, by, WHITE);
+            pill(g, "-", bx, by + 14, 42, ph2, () -> { dec.run(); save(); });
+            pill(g, "+", bx + 50, by + 14, 42, ph2, () -> { inc.run(); save(); });
+        }
+
+        String clock(long ticks) {
+            long s = ticks / 20;
+            return String.format(Locale.ROOT, "%02d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60);
+        }
+
+        void setMode(Mode m) {
+            Minecraft mc = Minecraft.getInstance();
+            boolean running = enabled && state == S.MINING && mc.player != null;
+            if (running) stopMining(mc, mc.player);
+            mode = m;
+            if (running) startMining(mc.player);
+            save();
+        }
+
+        String tabName(int i) {
+            return switch (i) {
+                case 0 -> tr("Chính", "Main");
+                case 1 -> tr("Đào cát", "Mining");
+                case 2 -> tr("Sinh tồn", "Survival");
+                case 3 -> tr("An toàn", "Safety");
+                case 4 -> tr("Tự đào (AI)", "Auto (AI)");
+                case 5 -> tr("Thống kê", "Stats");
+                case 6 -> tr("Nâng cao", "Advanced");
+                default -> "Key";
+            };
+        }
+
+        static final int[] TAB_ICON = {AutoSandScreen.I_CHIP, AutoSandScreen.I_PICK, AutoSandScreen.I_SPROUT, AutoSandScreen.I_RADAR,
+            AutoSandScreen.I_BRAIN, AutoSandScreen.I_CLOCK, AutoSandScreen.I_GEAR, AutoSandScreen.I_KEY};
+
+        // ---------------------------------------------------------------- khung chính
+        @Override
+        public void renderBackground(GuiGraphics g, int mx, int my, float pt) {
+            super.renderBackground(g, mx, my, pt);
+            Minecraft mc = Minecraft.getInstance();
+            poll(mc, mx, my);
+            hits.clear();
+            acc = theme.accent();
+            acc2 = theme.accent2();
+
+            int maxW = Math.max(480, this.width - 16), maxH = Math.max(300, this.height - 16);
+            int wp, hp;
+            switch (winMode) {
+                case 0 -> { wp = 700; hp = 420; }
+                case 2 -> { wp = 1040; hp = 540; }
+                case 3 -> { wp = maxW; hp = maxH; }
+                default -> { wp = 860; hp = 480; }
+            }
+            pw = Math.min(maxW, wp);
+            ph = Math.min(maxH, hp);
+            px = (this.width - pw) / 2;
+            py = (this.height - ph) / 2;
+            tight = ph < 450;
+            boolean compact = pw < 820;
+
+            f(g, 0, 0, this.width, this.height, 0x4A071126);
+            round(g, px - 5, py - 5, pw + 10, ph + 10, 20, 0x304B3BFF);
+            round(g, px - 2, py - 2, pw + 4, ph + 4, 18, argb(acc, 0x66));
+            round(g, px, py, pw, ph, 16, 0xE90B142B);
+            round(g, px + 2, py + 2, pw - 4, ph - 4, 14, 0xD914203C);
+
+            int pad = tight ? 12 : 18, left = px + pad, right = px + pw - pad, top = py + (tight ? 10 : 16);
+            int hh = tight ? 40 : 48, logo = tight ? 44 : 52;
+
+            // header
+            round(g, left, top, logo, logo, 13, 0xFF3D1D80);
+            round(g, left + 3, top + 3, logo - 6, logo - 6, 11, 0xFF6B36D9);
+            icon(g, AutoSandScreen.I_CHIP, left + (logo - 27) / 2, top + (logo - 27) / 2, 3, 0xFFE7D8FF);
+            t(g, "AutoSand", left + logo + 10, top + 4, WHITE);
+            t(g, "PRO STUDIO", left + logo + 10 + this.font.width("AutoSand") + 10, top + 4, PURPLE);
+            String sub = compact ? "Smart Bot  -  Premium" : "KingSMP  -  Smart Bot  -  Premium Edition";
+            t(g, sub, left + logo + 10, top + (tight ? 20 : 27), MUTED);
+
+            int mw = 128, mxp = right - mw;
+            round(g, mxp, top + 2, mw, hh, 12, 0xFF142944);
+            t(g, "Master", mxp + 15, top + 2 + (hh - 22) / 2, GREEN);
+            t(g, enabled ? "ON" : "OFF", mxp + 15, top + 2 + (hh - 22) / 2 + 12, MUTED);
+            int tw2 = 42, tsy = top + 2 + (hh - 22) / 2;
+            round(g, right - 54, tsy, tw2, 22, 11, enabled ? GREEN : 0xFF56627B);
+            round(g, right - (enabled ? 30 : 50), tsy + 3, 16, 16, 8, WHITE);
+            hit(mxp, top + 2, mw, hh, () -> setEnabled(Minecraft.getInstance(), !enabled));
+
+            int sizeW = compact ? 56 : 150, themeW = compact ? 96 : 168;
+            int sx = mxp - 8 - sizeW, tx = sx - 8 - themeW;
+            pill(g, compact ? winLabel() : tr("Kích thước: ", "Size: ") + winLabel(), sx, top + 2, sizeW, hh, () -> { winMode = winMode >= 3 ? 0 : winMode + 1; save(); });
+            pill(g, compact ? theme.label : "Theme: " + theme.label, tx, top + 2, themeW, hh, () -> { theme = theme.next(); save(); });
+            int premX = left + logo + 10 + 250;
+            if (!compact && premX + 150 < tx - 8) {
+                round(g, premX, top + 2, 150, hh, 12, 0xFF172D4A);
+                round(g, premX, top + 2, 3, hh, 2, GREEN);
+                t(g, "SNAD PREMIUM", premX + 12, top + 2 + (hh - 18) / 2, GREEN);
+                t(g, fit(License.status(), 130), premX + 12, top + 2 + (hh - 18) / 2 + 11, MUTED);
+            }
+            t(g, "x", right - 4, py + 3, MUTED);
+            hit(right - 14, py, 22, 14, this::onClose);
+
+            // tab
+            int navY = top + hh + (tight ? 10 : 12), navGap = tight ? 5 : 7, navH = tight ? 34 : 40;
+            int navW = (pw - pad * 2 - navGap * 7) / 8;
+            for (int i = 0; i < 8; i++) {
+                final int idx = i;
+                int bx = left + i * (navW + navGap);
+                button(g, "", bx, navY, navW, navH, tab == i, () -> { tab = idx; lastPsTab = idx; });
+                String nm = tabName(i);
+                int icol = tab == i ? 0xFFFFFFFF : acc2;
+                if (navW >= 96) {
+                    icon(g, TAB_ICON[i], bx + 9, navY + (navH - 18) / 2, 2, icol);
+                    t(g, fit(nm, navW - 36), bx + 31, navY + (navH - 8) / 2, WHITE);
+                } else {
+                    icon(g, TAB_ICON[i], bx + navW / 2 - 4, navY + 4, 1, icol);
+                    ct(g, fit(nm, navW - 6), bx + navW / 2, navY + navH - 13, WHITE);
+                }
+            }
+
+            int cy = navY + navH + (tight ? 8 : 12), footY = py + ph - (tight ? 24 : 32), cb = footY - (tight ? 8 : 12);
+            int ch = cb - cy, gap = tight ? 10 : 14, cw = (pw - pad * 2 - gap) / 2, lx = left, rx = left + cw + gap;
+            if (tab == 0) dashboard(g, lx, rx, cy, cw, ch);
+            else page(g, lx, rx, cy, cw, ch);
+
+            f(g, left, footY, pw - pad * 2, 1, 0x665D83B3);
+            t(g, "AutoSand Pro Studio  |  By SNAD Team", left + 6, footY + (tight ? 7 : 10), MUTED);
+            String st = fit(stateText(), pw / 2 - 20);
+            t(g, st, right - this.font.width(st) - 6, footY + (tight ? 7 : 10), MUTED);
+
+            for (Hit h : hits) if (h.has(mx, my)) round(g, h.x(), h.y(), h.w(), h.h(), 7, 0x18FFFFFF);
+        }
+
+        // ---------------------------------------------------------------- tab CHÍNH
+        void dashboard(GuiGraphics g, int lx, int rx, int cy, int cw, int ch) {
+            int eh = tight ? 32 : 56;
+            int lth = tight ? 96 : Math.max(140, Math.min(184, ch - 100 - eh - 20));
+            int lby = cy + lth + (tight ? 8 : 10);
+            int lbh = Math.max(60, ch - lth - (tight ? 8 : 10) - eh - (tight ? 8 : 10));
+
+            card(g, lx, cy, cw, lth);
+            t(g, tr("Trạng thái hệ thống", "System status"), lx + 16, cy + (tight ? 9 : 14), WHITE);
+            f(g, lx + 14, cy + (tight ? 25 : 38), cw - 28, 1, 0x557BA6D5);
+            int infoX, row0, pitch;
+            if (tight) { infoX = lx + 16; row0 = cy + 34; pitch = 18; }
+            else {
+                infoX = lx + 150; row0 = cy + 50; pitch = Math.max(24, (lth - 58) / 4);
+                int ox = lx + 76, oy = cy + (lth + 38) / 2;
+                round(g, ox - 46, oy - 46, 92, 92, 46, 0xFF293F8D);
+                round(g, ox - 41, oy - 41, 82, 82, 41, 0xFF1A2A59);
+                round(g, ox - 36, oy - 36, 72, 72, 36, 0xFF5430A4);
+                icon(g, AutoSandScreen.I_PICK, ox - 13, oy - 13, 3, GOLD);
+            }
+            int vx = infoX + (tight ? 84 : 100);
+            t(g, tr("Trạng thái:", "Status:"), infoX, row0, MUTED);
+            t(g, fit(enabled ? tr("Đang hoạt động", "Running") : tr("Đang tắt", "Stopped"), cw - (vx - lx) - 14), vx, row0, enabled ? GREEN : GOLD);
+            t(g, tr("Chế độ đào:", "Mine mode:"), infoX, row0 + pitch, MUTED);
+            t(g, fit(mode.label, cw - (vx - lx) - 14), vx, row0 + pitch, acc2);
+            t(g, tr("Thời gian chạy:", "Run time:"), infoX, row0 + pitch * 2, MUTED);
+            t(g, clock(statTicks), vx, row0 + pitch * 2, WHITE);
+            t(g, tr("Tổng cát đã giao:", "Sand delivered:"), infoX, row0 + pitch * 3, MUTED);
+            t(g, String.valueOf(statSand), vx, row0 + pitch * 3, WHITE);
+
+            card(g, lx, lby, cw, lbh);
+            t(g, tr("Chế độ đào", "Mine mode"), lx + 16, lby + (tight ? 8 : 14), WHITE);
+            int my0 = lby + (tight ? 24 : 40), mg = 8, mW = (cw - 24 - mg * 2) / 3, mH = tight ? 34 : Math.min(60, lbh - 62);
+            button(g, Mode.BUILTIN.label, lx + 12, my0, mW, mH, mode == Mode.BUILTIN, () -> setMode(Mode.BUILTIN));
+            button(g, Mode.KEYS.label, lx + 12 + mW + mg, my0, mW, mH, mode == Mode.KEYS, () -> setMode(Mode.KEYS));
+            button(g, Mode.NUKER.label, lx + 12 + (mW + mg) * 2, my0, mW, mH, mode == Mode.NUKER, () -> setMode(Mode.NUKER));
+            if (!tight && lbh >= 112) t(g, fit("AI A*  -  " + tr("Giữ phím", "Hold keys") + "  -  Nuker", cw - 32), lx + 16, my0 + mH + 10, MUTED);
+
+            int ey = cy + ch - eh;
+            round(g, lx + 4, ey + 3, cw - 8, eh, 12, 0x88260027);
+            round(g, lx, ey, cw, eh, 12, 0xFF8F1C45);
+            f(g, lx + 14, ey, cw - 28, 2, RED);
+            t(g, tr("DỪNG KHẨN CẤP", "EMERGENCY STOP"), lx + 20, ey + (tight ? 12 : 13), WHITE);
+            if (!tight) t(g, fit(tr("Nhấn End để dừng ngay lập tức", "Press End to stop immediately"), cw - 40), lx + 20, ey + 34, 0xFFFFC4D0);
+            hit(lx, ey, cw, eh, () -> emergencyStop(Minecraft.getInstance()));
+
+            int qy = cy, qh = ch;
+            if (!tight) {
+                int ah = 88;
+                card(g, rx, cy, cw, ah);
+                t(g, tr("Thông báo", "Announcements"), rx + 16, cy + 14, WHITE);
+                round(g, rx + 12, cy + 38, cw - 24, 40, 10, 0xFF30245D);
+                String an = Announcements.latest == null || Announcements.latest.isEmpty() ? tr("Chào mừng đến với AutoSand Pro Studio!", "Welcome to AutoSand Pro Studio!") : Announcements.latest;
+                t(g, fit(an, cw - 48), rx + 24, cy + 47, WHITE);
+                t(g, tr("Mod được phát triển bởi SNAD Team", "Developed by SNAD Team"), rx + 24, cy + 62, MUTED);
+                qy = cy + ah + 12;
+                qh = ch - ah - 12;
+            }
+            card(g, rx, qy, cw, qh);
+            t(g, tr("Cài đặt nhanh", "Quick settings"), rx + 16, qy + (tight ? 8 : 14), WHITE);
+            int ry = qy + (tight ? 22 : 40), rw = cw - 24, rp = tight ? 30 : 37;
+            toggle(g, tr("Tự ăn", "Auto eat"), autoEat, rx + 12, ry, rw, () -> autoEat = !autoEat);
+            toggle(g, tr("Tự giao cát", "Auto deliver"), autoDeliver, rx + 12, ry + rp, rw, () -> autoDeliver = !autoDeliver);
+            toggle(g, tr("HUD trạng thái", "Status HUD"), hudOn, rx + 12, ry + rp * 2, rw, () -> hudOn = !hudOn);
+            int sy = ry + rp * 3 + (tight ? 4 : 6);
+            if (sy + 26 < qy + qh) {
+                t(g, tr("Theme màu", "Color theme"), rx + 16, sy, MUTED);
+                Theme[] ts = Theme.values();
+                int sgap = 4, sw = (cw - 24 - sgap * (ts.length - 1)) / ts.length, sh = tight ? 20 : 28;
+                int sy2 = sy + 14;
+                for (int i = 0; i < ts.length; i++) {
+                    final Theme tt = ts[i];
+                    int sxx = rx + 12 + i * (sw + sgap);
+                    boolean cur = tt == theme;
+                    if (cur) round(g, sxx - 2, sy2 - 2, sw + 4, sh + 4, 8, 0xFFFFFFFF);
+                    round(g, sxx, sy2, sw, sh, 6, 0xFF000000 | (tt.a == 0 ? 0xFF96FF : tt.a));
+                    hit(sxx, sy2, sw, sh, () -> { theme = tt; save(); });
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------- các tab còn lại (gắn cài đặt thật)
+        void page(GuiGraphics g, int lx, int rx, int cy, int cw, int ch) {
+            card(g, lx, cy, cw, ch);
+            card(g, rx, cy, cw, ch);
+            t(g, tabName(tab), lx + 16, cy + (tight ? 9 : 16), WHITE);
+            f(g, lx + 14, cy + (tight ? 25 : 40), cw - 28, 1, 0x557BA6D5);
+            t(g, tr("Tùy chỉnh", "Options"), rx + 16, cy + (tight ? 9 : 16), WHITE);
+            f(g, rx + 14, cy + (tight ? 25 : 40), cw - 28, 1, 0x557BA6D5);
+            int yy = cy + (tight ? 34 : 52), rp = tight ? 32 : 40, lw = cw - 24, ry = yy, sp = tight ? 50 : 66;
+            Minecraft mc = Minecraft.getInstance();
+            switch (tab) {
+                case 1 -> {
+                    toggle(g, tr("Nuker thông minh", "Smart Nuker"), useNuker, lx + 12, yy, lw, () -> {
+                        useNuker = !useNuker;
+                        if (enabled && state == S.MINING && mc.player != null) { nukerState = null; setNuker(mc.player, useNuker); }
+                    });
+                    toggle(g, tr("Đào xuyên cát", "Dig through sand"), AutoMiner.digThrough, lx + 12, yy + rp, lw, () -> AutoMiner.digThrough = !AutoMiner.digThrough);
+                    toggle(g, tr("Giữ phím tiến", "Hold forward"), keysForward, lx + 12, yy + rp * 2, lw, () -> keysForward = !keysForward);
+                    toggle(g, tr("Đào hầm nhiều lớp", "Multi-layer tunnel"), AutoMiner.tunnel, lx + 12, yy + rp * 3, lw, () -> { AutoMiner.tunnel = !AutoMiner.tunnel; AutoMiner.tunnelInit = false; });
+                    stepper(g, tr("Bán kính quét: ", "Scan radius: ") + AutoMiner.scanRadius, rx + 16, ry,
+                        () -> AutoMiner.scanRadius = Math.max(4, AutoMiner.scanRadius - 1), () -> AutoMiner.scanRadius = Math.min(48, AutoMiner.scanRadius + 1));
+                    stepper(g, tr("Tốc độ đào: ", "Mine speed: ") + mineSpeed + "%", rx + 16, ry + sp,
+                        () -> mineSpeed = Math.max(5, mineSpeed - 5), () -> mineSpeed = Math.min(500, mineSpeed + 5));
+                }
+                case 2 -> {
+                    toggle(g, tr("Tự ăn", "Auto eat"), autoEat, lx + 12, yy, lw, () -> autoEat = !autoEat);
+                    toggle(g, tr("Tự sửa xẻng (Mending)", "Auto repair (Mending)"), autoMend, lx + 12, yy + rp, lw, () -> autoMend = !autoMend);
+                    toggle(g, tr("Tự mua bình XP", "Auto buy XP"), autoBuy, lx + 12, yy + rp * 2, lw, () -> autoBuy = !autoBuy);
+                    toggle(g, tr("Tự mua đồ ăn", "Auto buy food"), autoBuyFood, lx + 12, yy + rp * 3, lw, () -> autoBuyFood = !autoBuyFood);
+                    toggle(g, tr("Tự cầm Totem", "Auto Totem"), autoTotem, lx + 12, yy + rp * 4, lw, () -> autoTotem = !autoTotem);
+                    stepper(g, tr("Sửa xẻng khi dưới: ", "Repair below: ") + mendPct + "%", rx + 16, ry,
+                        () -> mendPct = Math.max(5, mendPct - 5), () -> mendPct = Math.min(50, mendPct + 5));
+                }
+                case 3 -> {
+                    toggle(g, tr("Né nước / lava", "Avoid water / lava"), avoidLiquid, lx + 12, yy, lw, () -> avoidLiquid = !avoidLiquid);
+                    toggle(g, tr("Tự phòng thủ", "Auto defend"), autoDefend, lx + 12, yy + rp, lw, () -> autoDefend = !autoDefend);
+                    toggle(g, tr("HUD trạng thái", "Status HUD"), hudOn, lx + 12, yy + rp * 2, lw, () -> hudOn = !hudOn);
+                    t(g, tr("Bấm DỪNG KHẨN CẤP hoặc phím End để dừng ngay.", "Use EMERGENCY STOP or the End key to stop at once."), rx + 16, ry, MUTED);
+                    pill(g, tr("DỪNG KHẨN CẤP", "EMERGENCY STOP"), rx + 16, ry + 20, Math.min(220, cw - 32), tight ? 28 : 34, () -> emergencyStop(Minecraft.getInstance()));
+                }
+                case 4 -> {
+                    t(g, "AI A*", lx + 16, yy, acc2);
+                    t(g, fit(tr("Chế độ hiện tại: ", "Current mode: ") + mode.label, lw - 8), lx + 16, yy + 20, MUTED);
+                    t(g, fit(tr("Bộ tự đào dùng A* tìm cát, né nước / lava.", "Auto miner uses A* to find sand, avoiding water / lava."), lw - 8), lx + 16, yy + 36, MUTED);
+                    pill(g, mode.label + "  >", lx + 12, yy + 58, Math.min(200, lw), tight ? 28 : 34, () -> setMode(mode.next()));
+                }
+                case 5 -> {
+                    t(g, tr("Thống kê", "Statistics"), lx + 16, yy, acc2);
+                    t(g, tr("Cát đã giao: ", "Sand delivered: ") + statSand, lx + 16, yy + 22, WHITE);
+                    t(g, tr("Tiền kiếm được: ", "Earned: ") + fmtMoney(), lx + 16, yy + 40, GREEN);
+                    t(g, tr("Thời gian chạy: ", "Run time: ") + clock(statTicks), lx + 16, yy + 58, WHITE);
+                    t(g, tr("Số lần chết: ", "Deaths: ") + statDeaths, lx + 16, yy + 76, WHITE);
+                    t(g, tr("Đã chi (XP / Totem): ", "Spent (XP / Totem): ") + Math.round(xpSpent) + " / " + Math.round(totemSpent), lx + 16, yy + 94, MUTED);
+                }
+                case 6 -> {
+                    toggle(g, tr("Tự giao cát", "Auto deliver"), autoDeliver, lx + 12, yy, lw, () -> autoDeliver = !autoDeliver);
+                    toggle(g, tr("HUD trạng thái", "Status HUD"), hudOn, lx + 12, yy + rp, lw, () -> hudOn = !hudOn);
+                    toggle(g, tr("Ngôn ngữ: ", "Language: ") + ("en".equals(lang) ? "English" : "Tiếng Việt"), true, lx + 12, yy + rp * 2, lw, () -> lang = "en".equals(lang) ? "vi" : "en");
+                    pill(g, tr("Menu đầy đủ (cũ)", "Full menu (classic)"), rx + 16, ry, Math.min(240, cw - 32), tight ? 28 : 34,
+                        () -> Minecraft.getInstance().setScreen(new AutoSandScreen()));
+                }
+                default -> {
+                    t(g, "KEY", lx + 16, yy, GOLD);
+                    t(g, fit(License.valid() ? tr("Key hợp lệ", "Key valid") : tr("Chưa kích hoạt", "Not activated"), lw - 8), lx + 16, yy + 22, License.valid() ? GREEN : RED);
+                    t(g, fit(License.status(), lw - 8), lx + 16, yy + 40, MUTED);
+                    pill(g, tr("Quản lý key (menu cũ)", "Manage key (classic menu)"), rx + 16, ry, Math.min(260, cw - 32), tight ? 28 : 34,
+                        () -> { AutoSandScreen.lastTab = 7; Minecraft.getInstance().setScreen(new AutoSandScreen()); });
+                }
+            }
+            if (tab != 3 && tab != 6 && tab != 7 && tab != 1 && tab != 2) {
+                pill(g, tr("Menu đầy đủ (cũ)", "Full menu (classic)"), rx + 16, ry, Math.min(240, cw - 32), tight ? 28 : 34,
+                    () -> Minecraft.getInstance().setScreen(new AutoSandScreen()));
+            }
+            if (tab == 1 || tab == 2) {
+                pill(g, tr("Menu đầy đủ (cũ)", "Full menu (classic)"), rx + 16, cy + ch - (tight ? 42 : 52), Math.min(240, cw - 32), tight ? 28 : 34,
+                    () -> Minecraft.getInstance().setScreen(new AutoSandScreen()));
+            }
+        }
+    }
+
     // ============================== MÀN HÌNH CHÍNH ==============================
     static class AutoSandScreen extends Screen {
         static final int K_SWITCH = 0, K_CYCLE = 1, K_SLIDER = 2, K_BUTTON = 3, K_NOTE = 4, K_HEAD = 5,
@@ -4339,7 +4760,7 @@ public class AutoSandOrders implements ClientModInitializer {
         static int lastTab = 0;
 
         // biểu tượng pixel 9x9
-        static final int I_GEAR = 0, I_CLOCK = 1, I_PICK = 2, I_CHIP = 3, I_SPROUT = 4, I_RADAR = 5, I_BRAIN = 6;
+        static final int I_GEAR = 0, I_CLOCK = 1, I_PICK = 2, I_CHIP = 3, I_SPROUT = 4, I_RADAR = 5, I_BRAIN = 6, I_KEY = 7;
         static final String[][] ICONS = {
             {"...###...", ".#.###.#.", "..#####..", "###...###", "###...###", "###...###", "..#####..", ".#.###.#.", "...###..."},
             {"..#####..", ".#..#..#.", "#...#...#", "#...#...#", "#...###.#", "#.......#", "#.......#", ".#.....#.", "..#####.."},
@@ -4347,7 +4768,8 @@ public class AutoSandOrders implements ClientModInitializer {
             {"..#.#.#..", ".#######.", "##.....##", ".#.###.#.", "##.###.##", ".#.###.#.", "##.....##", ".#######.", "..#.#.#.."},
             {".###..##.", "#####.###", ".###..##.", "..##..#..", "...#.#...", "....#....", "....#....", "....#....", "..#####.."},
             {"...###...", ".##...##.", "#..###..#", "#.#...#.#", "#.#.#.#.#", "#.#...#.#", "#..###..#", ".##...##.", "...###..."},
-            {"..##.##..", ".#.#.#.#.", "##.###.##", "#.#.#.#.#", "#.#####.#", "##.#.#.##", ".#.###.#.", "..#####..", "....#...."}
+            {"..##.##..", ".#.#.#.#.", "##.###.##", "#.#.#.#.#", "#.#####.#", "##.#.#.##", ".#.###.#.", "..#####..", "....#...."},
+            {"..###....", ".#...#...", ".#...#...", "..###....", "...#.....", "...##....", "...#.....", "...##....", "........."}
         };
 
         static final class Ctl {
@@ -4372,7 +4794,8 @@ public class AutoSandOrders implements ClientModInitializer {
         EditBox keyBox, extBox;
         String keyKeep = "", extKeep = "", lastNote = "";
         boolean wasValid, wasDown = true, f12Armed = false, endDown = true, pendingRebuild = false, pendingClose = false, resizing = false, themeOpen = false, sbDrag = false;
-        int ghostW, ghostH;
+        int ghostW, ghostH, sbGrab;
+        boolean sbMoved;
         Ctl dragCtl;
         final long openAt = System.currentTimeMillis();
         String tipTitle, tipText;
@@ -4884,6 +5307,16 @@ public class AutoSandOrders implements ClientModInitializer {
             if (raw != c.gi.getAsInt()) c.si.accept(raw);
         }
 
+        int sbThumbH() { return Math.min(viewH, Math.max(28, viewH * viewH / Math.max(1, totalH))); }
+
+        /** Kéo thanh cuộn: đỉnh thanh bám theo chuột (trừ điểm nắm), chỉ tính lại bố cục - không dựng lại widget mỗi khung hình. */
+        void dragScroll(int my) {
+            int range = Math.max(1, viewH - sbThumbH());
+            float f = (my - sbGrab - viewTop) / (float) range;
+            int ns = Math.max(0, Math.min(maxScroll, Math.round(f * maxScroll)));
+            if (ns != scroll) { scroll = ns; layout(); sbMoved = true; }
+        }
+
         void pollInput(Minecraft mc, int mx, int my) {
             boolean down = rawMouse(mc, 0) || mcLeft(mc);
             boolean f12 = rawKey(mc, org.lwjgl.glfw.GLFW.GLFW_KEY_F12);
@@ -4901,25 +5334,29 @@ public class AutoSandOrders implements ClientModInitializer {
                 if (inside(mx, my, x0 + pw - 28, y0 + ph - 28, 28, 28)) {
                     resizing = true;
                     ghostW = pw; ghostH = ph;
-                } else if (maxScroll > 0 && inside(mx, my, x0 + pw - 20, viewTop, 20, viewH)) {
+                } else if (maxScroll > 0 && inside(mx, my, x0 + pw - 14, viewTop, 14, viewH)) {
                     sbDrag = true;
+                    sbMoved = false;
+                    int th = sbThumbH();
+                    int tTop = viewTop + (int) ((viewH - th) * (scroll / (float) maxScroll));
+                    sbGrab = (my >= tTop && my < tTop + th) ? my - tTop : th / 2;   // bấm trúng thanh: giữ nguyên điểm nắm; bấm vào rãnh: nhảy tới đó
+                    dragScroll(my);
                 } else {
                     for (Ctl c : ctls) if (c.kind == K_SLIDER && hit(c, mx, my)) { dragCtl = c; break; }
                 }
             }
             if (down) {
                 if (dragCtl != null) applySlider(dragCtl, mx);
-                if (sbDrag) {
-                    int ns = Math.max(0, Math.min(maxScroll, Math.round((my - viewTop) / (float) Math.max(1, viewH) * maxScroll)));
-                    if (ns != scroll) { scroll = ns; layout(); pendingRebuild = true; }
-                }
+                if (sbDrag) dragScroll(my);
                 if (resizing) {
                     ghostW = Math.max(Math.min(420, this.width - 8), Math.min(this.width - 8, mx - x0 + 6));
                     ghostH = Math.max(Math.min(280, this.height - 8), Math.min(this.height - 8, my - y0 + 6));
                 }
             } else {
                 if (dragCtl != null) save();
+                if (sbDrag && sbMoved) pendingRebuild = true;             // thả chuột mới dựng lại nút bấm theo vị trí mới
                 sbDrag = false;
+                sbMoved = false;
                 if (resizing) {
                     winMode = 4; winW = ghostW; winH = ghostH;
                     save();
@@ -5127,7 +5564,7 @@ public class AutoSandOrders implements ClientModInitializer {
             if (maxScroll > 0) {                                      // thanh cuộn kiểu glass
                 int sx = x0 + pw - 12, sy = viewTop, sh = viewH;
                 rrect(g, sx, sy, 6, sh, 3, argb(acc, 0x2A));
-                int th = Math.max(28, sh * sh / Math.max(1, totalH));
+                int th = sbThumbH();
                 int tyy = sy + (int) ((sh - th) * (scroll / (float) maxScroll));
                 rrect(g, sx, tyy, 6, th, 3, argb(acc2, sbDrag ? 0xFF : 0xD0));
             }
