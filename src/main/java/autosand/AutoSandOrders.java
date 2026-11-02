@@ -4793,9 +4793,11 @@ public class AutoSandOrders implements ClientModInitializer {
         int acc, acc2;
         EditBox keyBox, extBox;
         String keyKeep = "", extKeep = "", lastNote = "";
-        boolean wasValid, wasDown = true, f12Armed = false, endDown = true, pendingRebuild = false, pendingClose = false, resizing = false, themeOpen = false, sbDrag = false;
-        int ghostW, ghostH, sbGrab;
-        boolean sbMoved;
+        boolean wasValid, wasDown = true, f12Armed = false, endDown = true, pendingRebuild = false, pendingClose = false, resizing = false, themeOpen = false, sbDrag = false, upDown = false, dnDown = false, pgUpDown = false, pgDnDown = false;
+        int sbGrab = 0, arrowDir = 0;
+        long arrowAt = 0;
+        static final int SB_AR = 16;                              // chiều cao nút ▲ ▼
+        int ghostW, ghostH;
         Ctl dragCtl;
         final long openAt = System.currentTimeMillis();
         String tipTitle, tipText;
@@ -4906,7 +4908,10 @@ public class AutoSandOrders implements ClientModInitializer {
             int y1 = c.y, y2 = c.y + c.h;
             if (!c.fixed) { y1 = Math.max(y1, viewTop); y2 = Math.min(y2, viewTop + viewH); }
             if (y2 - y1 < 4) return;
-            addBtn(c.x, y1, c.w, y2 - y1, c.act != null ? c.act : () -> { applySlider(c, guiMouseX()); save(); });
+            int bw = c.w;
+            if (!c.fixed && maxScroll > 0) bw = Math.min(bw, sbZoneX() - c.x);   // nút ẩn không chồng lên thanh cuộn
+            if (bw < 8) return;
+            addBtn(c.x, y1, bw, y2 - y1, c.act != null ? c.act : () -> { applySlider(c, guiMouseX()); save(); });
         }
 
         void makeEdit(Ctl c) {
@@ -5273,11 +5278,25 @@ public class AutoSandOrders implements ClientModInitializer {
             }
         }
 
+        int sbZoneX() { return x0 + pw - 30; }                    // vùng bấm thanh cuộn rộng 30px (dễ chạm trên điện thoại)
+
+        int trackTop() { return viewTop + SB_AR; }
+
+        int trackH() { return Math.max(20, viewH - SB_AR * 2); }
+
+        int sbThumbH() { return Math.max(24, Math.min(trackH(), trackH() * viewH / Math.max(1, totalH))); }
+
+        int sbThumbY(int th) { return trackTop() + (int) ((trackH() - th) * (scroll / (float) Math.max(1, maxScroll))); }
+
+        void scrollBy(int d) {
+            int ns = Math.max(0, Math.min(maxScroll, scroll + d));
+            if (ns != scroll) { scroll = ns; layout(); pendingRebuild = true; }
+        }
+
         @Override
         public boolean mouseScrolled(double mx, double my, double sx, double sy) {
             if (maxScroll > 0) {
-                int ns = Math.max(0, Math.min(maxScroll, scroll - (int) Math.signum(sy) * 22));
-                if (ns != scroll) { scroll = ns; rebuildWidgets(); }
+                scrollBy(-(int) Math.signum(sy) * 22);
                 return true;
             }
             return super.mouseScrolled(mx, my, sx, sy);
@@ -5307,16 +5326,6 @@ public class AutoSandOrders implements ClientModInitializer {
             if (raw != c.gi.getAsInt()) c.si.accept(raw);
         }
 
-        int sbThumbH() { return Math.min(viewH, Math.max(28, viewH * viewH / Math.max(1, totalH))); }
-
-        /** Kéo thanh cuộn: đỉnh thanh bám theo chuột (trừ điểm nắm), chỉ tính lại bố cục - không dựng lại widget mỗi khung hình. */
-        void dragScroll(int my) {
-            int range = Math.max(1, viewH - sbThumbH());
-            float f = (my - sbGrab - viewTop) / (float) range;
-            int ns = Math.max(0, Math.min(maxScroll, Math.round(f * maxScroll)));
-            if (ns != scroll) { scroll = ns; layout(); sbMoved = true; }
-        }
-
         void pollInput(Minecraft mc, int mx, int my) {
             boolean down = rawMouse(mc, 0) || mcLeft(mc);
             boolean f12 = rawKey(mc, org.lwjgl.glfw.GLFW.GLFW_KEY_F12);
@@ -5326,37 +5335,54 @@ public class AutoSandOrders implements ClientModInitializer {
             boolean typing = (keyBox != null && keyBox.isFocused()) || (extBox != null && extBox.isFocused());
             if (end && !endDown && !typing) emergencyStop(mc);
             endDown = end;
+            if (maxScroll > 0 && !typing) {                           // phím mũi tên / PageUp / PageDown
+                boolean u = rawKey(mc, org.lwjgl.glfw.GLFW.GLFW_KEY_UP), d = rawKey(mc, org.lwjgl.glfw.GLFW.GLFW_KEY_DOWN);
+                boolean pu = rawKey(mc, org.lwjgl.glfw.GLFW.GLFW_KEY_PAGE_UP), pd = rawKey(mc, org.lwjgl.glfw.GLFW.GLFW_KEY_PAGE_DOWN);
+                if (u && !upDown) scrollBy(-30);
+                if (d && !dnDown) scrollBy(30);
+                if (pu && !pgUpDown) scrollBy(-viewH);
+                if (pd && !pgDnDown) scrollBy(viewH);
+                upDown = u; dnDown = d; pgUpDown = pu; pgDnDown = pd;
+            }
 
             if (down && !wasDown) {                                   // vừa bấm chuột
                 dragCtl = null;
                 resizing = false;
                 sbDrag = false;
+                arrowDir = 0;
                 if (inside(mx, my, x0 + pw - 28, y0 + ph - 28, 28, 28)) {
                     resizing = true;
                     ghostW = pw; ghostH = ph;
-                } else if (maxScroll > 0 && inside(mx, my, x0 + pw - 14, viewTop, 14, viewH)) {
-                    sbDrag = true;
-                    sbMoved = false;
-                    int th = sbThumbH();
-                    int tTop = viewTop + (int) ((viewH - th) * (scroll / (float) maxScroll));
-                    sbGrab = (my >= tTop && my < tTop + th) ? my - tTop : th / 2;   // bấm trúng thanh: giữ nguyên điểm nắm; bấm vào rãnh: nhảy tới đó
-                    dragScroll(my);
+                } else if (maxScroll > 0 && inside(mx, my, sbZoneX(), viewTop, x0 + pw - sbZoneX(), viewH)) {
+                    if (my < viewTop + SB_AR) { arrowDir = -1; scrollBy(-30); arrowAt = System.currentTimeMillis() + 350; }       // nút ▲
+                    else if (my >= viewTop + viewH - SB_AR) { arrowDir = 1; scrollBy(30); arrowAt = System.currentTimeMillis() + 350; } // nút ▼
+                    else {
+                        sbDrag = true;
+                        int th = sbThumbH(), ty = sbThumbY(th);
+                        if (my >= ty && my < ty + th) sbGrab = my - ty;  // bấm trúng thanh trượt: giữ nguyên điểm nắm
+                        else sbGrab = th / 2;                             // bấm vào rãnh: nhảy tới đó
+                    }
                 } else {
                     for (Ctl c : ctls) if (c.kind == K_SLIDER && hit(c, mx, my)) { dragCtl = c; break; }
                 }
             }
             if (down) {
                 if (dragCtl != null) applySlider(dragCtl, mx);
-                if (sbDrag) dragScroll(my);
+                if (arrowDir != 0 && System.currentTimeMillis() >= arrowAt) { scrollBy(arrowDir * 18); arrowAt = System.currentTimeMillis() + 60; }   // giữ nút ▲▼ để cuộn liên tục
+                if (sbDrag) {
+                    int th = sbThumbH(), range = Math.max(1, trackH() - th);
+                    int ns = Math.max(0, Math.min(maxScroll, Math.round((my - sbGrab - trackTop()) / (float) range * maxScroll)));
+                    if (ns != scroll) { scroll = ns; layout(); }         // chỉ bố cục lại, dựng widget khi thả chuột (tránh giật)
+                }
                 if (resizing) {
                     ghostW = Math.max(Math.min(420, this.width - 8), Math.min(this.width - 8, mx - x0 + 6));
                     ghostH = Math.max(Math.min(280, this.height - 8), Math.min(this.height - 8, my - y0 + 6));
                 }
             } else {
                 if (dragCtl != null) save();
-                if (sbDrag && sbMoved) pendingRebuild = true;             // thả chuột mới dựng lại nút bấm theo vị trí mới
+                if (sbDrag) pendingRebuild = true;
                 sbDrag = false;
-                sbMoved = false;
+                arrowDir = 0;
                 if (resizing) {
                     winMode = 4; winW = ghostW; winH = ghostH;
                     save();
@@ -5562,11 +5588,17 @@ public class AutoSandOrders implements ClientModInitializer {
             g.disableScissor();
             for (Ctl c : ctls) if (c.fixed) drawCtl(g, c, mx, my);
             if (maxScroll > 0) {                                      // thanh cuộn kiểu glass
-                int sx = x0 + pw - 12, sy = viewTop, sh = viewH;
-                rrect(g, sx, sy, 6, sh, 3, argb(acc, 0x2A));
-                int th = sbThumbH();
-                int tyy = sy + (int) ((sh - th) * (scroll / (float) maxScroll));
-                rrect(g, sx, tyy, 6, th, 3, argb(acc2, sbDrag ? 0xFF : 0xD0));
+                int sx = x0 + pw - 13, sy = viewTop, sh = viewH;
+                rrect(g, sx, trackTop(), 8, trackH(), 4, argb(acc, 0x3A));
+                int th = sbThumbH(), tyy = sbThumbY(th);
+                rrect(g, sx, tyy, 8, th, 4, argb(acc2, sbDrag ? 0xFF : 0xE0));
+                boolean upOn = scroll > 0, dnOn = scroll < maxScroll;   // nút ▲ ▼ ở hai đầu thanh cuộn
+                rrect(g, sx - 3, sy, 14, SB_AR - 2, 4, argb(acc, arrowDir < 0 ? 0xA0 : 0x50));
+                rrect(g, sx - 3, sy + sh - SB_AR + 2, 14, SB_AR - 2, 4, argb(acc, arrowDir > 0 ? 0xA0 : 0x50));
+                for (int i = 0; i < 4; i++) {
+                    g.fill(sx + 4 - i, sy + 4 + i, sx + 4 + i + 1, sy + 5 + i, argb(acc2, upOn ? 0xFF : 0x60));
+                    g.fill(sx + 4 - i, sy + sh - 5 - i, sx + 4 + i + 1, sy + sh - 4 - i, argb(acc2, dnOn ? 0xFF : 0x60));
+                }
             }
             if (tab == 0 && cw > 420) {                               // logo mầm cây
                 int wx = x0 + pw - 62, wy = cy + ch - 34;
